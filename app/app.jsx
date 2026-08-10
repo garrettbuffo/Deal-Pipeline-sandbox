@@ -3547,7 +3547,48 @@ suggestedCapexPerUnit: the $2,000/unit floor if the property looks well-maintain
     patchObj.analystBrokerStory = parsed.brokerStory || d.analystBrokerStory;
     patchObj.analystStoryRead = parsed.altusStoryRead || d.analystStoryRead;
 
-    // ---- Deterministic verdict, using the just-parsed figures merged over the existing deal ----
+    // ---- Underwrite price ceiling — the Year-3 Yield-on-Cost Spread Test. Resolve this BEFORE
+    // computing the verdict below so every downstream figure (going-in cap, spread, IRR check) is
+    // consistent with whatever price ends up stored. Only ever caps the price DOWN from the
+    // ask/broker price — never auto-inflates it, and never claims the adjustment hit exactly 100
+    // bps if the deal's NOI trajectory can't actually support that at any price. ----
+    let priceAdjustNote = '';
+    {
+      const askForCheck = numOr(patchObj.purchasePrice != null ? patchObj.purchasePrice : d.purchasePrice, 0);
+      const capexForCheck = numOr(patchObj.capex != null ? patchObj.capex : d.capex, 0);
+      if (askForCheck > 0) {
+        const merged0 = { ...d, ...patchObj };
+        const m0 = window.computeMetrics ? window.computeMetrics(merged0) : null;
+        const uw0 = window.hasUWInputs && window.hasUWInputs(merged0) && window.computeUW ? window.computeUW(merged0) : null;
+        const y3_0 = uw0 && uw0.rows && uw0.rows[3];
+        if (m0 && m0.goingInCap > 0 && y3_0 && y3_0.noi > 0 && m0.totalBasis > 0) {
+          const spread0Bps = Math.round(((y3_0.noi / m0.totalBasis) - m0.goingInCap) * 10000);
+          if (spread0Bps < 100) {
+            const maxTotalBasis0 = y3_0.noi / (m0.goingInCap + 0.01);
+            const maxPrice0 = Math.round(maxTotalBasis0 - capexForCheck);
+            if (maxPrice0 > 0 && maxPrice0 < askForCheck) {
+              // Going-in cap rises as price falls, so this isn't guaranteed to actually help —
+              // for a deal whose in-place NOI is already close to its Year-3 NOI (thin growth),
+              // cutting price can raise going-in cap faster than it helps the Year-3 spread and
+              // make things WORSE. Verify the adjustment is a genuine improvement before writing
+              // it into the deal; if it isn't, leave the price alone and say so instead.
+              const m1 = window.computeMetrics({ ...merged0, purchasePrice: maxPrice0 });
+              const newSpreadBps = m1.totalBasis > 0 ? Math.round(((y3_0.noi / m1.totalBasis) - m1.goingInCap) * 10000) : null;
+              if (newSpreadBps != null && newSpreadBps > spread0Bps) {
+                patchObj.purchasePrice = maxPrice0;
+                const closedGap = newSpreadBps >= 100;
+                priceAdjustNote = ` Underwrite price adjusted from the $${Math.round(askForCheck).toLocaleString()} ask to $${maxPrice0.toLocaleString()} — the ask didn't hold a 100 bps Year-3 yield-on-cost spread, so this is the price/capex combination that ${closedGap ? 'closes the gap' : "gets closest to it (this deal's in-place-to-stabilized NOI growth may be too thin to hit a full 100 bps spread at any price)"} — new spread ${newSpreadBps} bps.`;
+              } else {
+                priceAdjustNote = ` The $${Math.round(askForCheck).toLocaleString()} ask doesn't hold a 100 bps Year-3 yield-on-cost spread (${spread0Bps} bps), but cutting price doesn't fix it here — going-in cap rises faster than the Year-3 spread as price falls, meaning this deal's in-place NOI is already close to its Year-3 NOI. Look to capex or opex, not price, to close this gap.`;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // ---- Deterministic verdict, using the just-parsed figures merged over the existing deal
+    // (purchasePrice above already reflects any spread-test adjustment) ----
     const merged = { ...d, ...patchObj };
     const m = window.computeMetrics ? window.computeMetrics(merged) : { goingInCap: 0, totalBasis: 0 };
     const uw = window.hasUWInputs && window.hasUWInputs(merged) && window.computeUW ? window.computeUW(merged) : null;
@@ -3645,7 +3686,7 @@ suggestedCapexPerUnit: the $2,000/unit floor if the property looks well-maintain
 
     patchObj.status = gbStatus;
     patchObj.analystVerdict = analystVerdict;
-    patchObj.analystVerdictNotes = verdictReason + backoutNote + verificationNote;
+    patchObj.analystVerdictNotes = verdictReason + priceAdjustNote + backoutNote + verificationNote;
     if (analystMaxCapex != null) patchObj.analystMaxCapex = analystMaxCapex;
     if (analystMaxPrice != null) patchObj.analystMaxPrice = analystMaxPrice;
 
