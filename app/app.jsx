@@ -3561,6 +3561,20 @@ suggestedCapexPerUnit: the $2,000/unit floor if the property looks well-maintain
     const dealIRR = uw ? uw.irr : null;
     const avgCoC = uw ? uw.avgYield : null;
 
+    // ---- Back out max supportable price/capex from a 100bps Year-3-YOC-over-going-in-cap
+    // target — the same spread gate used above, solved for total basis instead of checked
+    // against it. Two views: how much capex fits on top of the current price, and how much
+    // price fits on top of the current capex assumption. ----
+    let analystMaxTotalBasis = null, analystMaxCapex = null, analystMaxPrice = null;
+    if (y3 && y3.noi > 0 && m.goingInCap > 0) {
+      const targetSpread = 0.01; // 100bps — matches the spread pass/fail gate above
+      analystMaxTotalBasis = y3.noi / (m.goingInCap + targetSpread);
+      const currentPrice = numOr(merged.purchasePrice, 0);
+      const currentCapex = numOr(merged.capex, 0);
+      if (currentPrice > 0) analystMaxCapex = Math.max(0, Math.round(analystMaxTotalBasis - currentPrice));
+      analystMaxPrice = Math.round(analystMaxTotalBasis - currentCapex);
+    }
+
     // Risk-adjusted return hurdle (sliding scale) — mirrors the analyst-screen/multifamily-uw
     // skill: 4.0%→22%, 5.0%→20%, 7.0%+→15% (floor). A lower going-in cap rate carries more risk
     // and needs a materially higher IRR to compensate.
@@ -3603,9 +3617,37 @@ suggestedCapexPerUnit: the $2,000/unit floor if the property looks well-maintain
         : `Going-in cap rate clears the hurdle, but the yield-on-cost spread (${yieldOnCostSpreadBps} bps) is below the 100 bps gate — the capital program isn't earning its keep even though the in-place basis is fine.`)
         + returnSummary + ' ' + capitalNote;
     }
+    // ---- Verification loop — confirm the screen actually produced everything the analyst
+    // standard requires before trusting the verdict above. A missing critical input means the
+    // verdict was computed off an incomplete picture, so surface that rather than staying quiet. ----
+    const checklist = [
+      { label: 'Going-in cap rate', ok: goingInCapPct > 0 },
+      { label: 'Gross potential rent', ok: merged.gprAnnual != null && merged.gprAnnual !== '' },
+      { label: 'Physical vacancy loss', ok: merged.physVacLoss != null && merged.physVacLoss !== '' },
+      { label: 'Loss to lease', ok: merged.lossToLease != null && merged.lossToLease !== '' },
+      { label: 'Bad debt', ok: merged.badDebt != null && merged.badDebt !== '' },
+      { label: 'Other income', ok: merged.otherIncome != null && merged.otherIncome !== '' },
+      { label: 'Opex assumption ($/unit)', ok: merged.marketOpexPerUnit != null && merged.marketOpexPerUnit !== '' && merged.marketOpexPerUnit > 0 },
+      { label: 'Year-3 yield-on-cost vs. going-in cap', ok: yieldOnCostSpreadBps != null },
+    ];
+    const missingItems = checklist.filter((c) => !c.ok).map((c) => c.label);
+    if (missingItems.length) {
+      gbStatus = "GB Don't Review"; analystVerdict = 'watch';
+    }
+
+    const moneyfmt = (v) => v == null ? 'n/a' : '$' + Math.round(v).toLocaleString();
+    const backoutNote = analystMaxTotalBasis != null
+      ? ` Backing into a 100 bps Year-3 spread off ${moneyfmt(y3.noi)} of Year-3 NOI: max total basis ${moneyfmt(analystMaxTotalBasis)} — that's max capex of ${moneyfmt(analystMaxCapex)} at the current price, or max price of ${moneyfmt(analystMaxPrice)} at the current capex budget.`
+      : '';
+    const verificationNote = missingItems.length
+      ? ` Verification: incomplete — missing ${missingItems.join(', ')}. Verdict held at "watch" until these are filled in.`
+      : ' Verification: all required inputs present (going-in cap, EGI components, opex assumption, Year-3 yield-on-cost spread).';
+
     patchObj.status = gbStatus;
     patchObj.analystVerdict = analystVerdict;
-    patchObj.analystVerdictNotes = verdictReason;
+    patchObj.analystVerdictNotes = verdictReason + backoutNote + verificationNote;
+    if (analystMaxCapex != null) patchObj.analystMaxCapex = analystMaxCapex;
+    if (analystMaxPrice != null) patchObj.analystMaxPrice = analystMaxPrice;
 
     // ---- Broker questions — focused on the BIG assumptions that actually move this deal's
     // return (renovation program, new ancillary income), and WHY the broker believes them —
