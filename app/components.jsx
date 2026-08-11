@@ -42,14 +42,13 @@ function lastActivityOf(d){
 /* ============================ Domain config ============================ */
 // funnel progression, then terminal/negative outcomes
 // Active-pipeline review stages, then LOI-process stages, then dead.
-const PIPELINE_STAGES = ['New Deal','Quick UW','Full UW','Excel UW'];
+const PIPELINE_STAGES = ['New Deal','Full UW','Excel UW'];
 const LOI_STAGES = ['LOI Submitted','LOI Lost','Under Contract','Purchased'];
 // Linear happy-path progression used by the deal-detail stepper.
-const STAGES = ['New Deal','Quick UW','Full UW','Excel UW','LOI Submitted','Under Contract','Purchased'];
-const STAGE_ALL = ['New Deal','Quick UW','Full UW','Excel UW','LOI Submitted','LOI Lost','Under Contract','Purchased','Dead','Stash'];
+const STAGES = ['New Deal','Full UW','Excel UW','LOI Submitted','Under Contract','Purchased'];
+const STAGE_ALL = ['New Deal','Full UW','Excel UW','LOI Submitted','LOI Lost','Under Contract','Purchased','Dead','Stash'];
 const STAGE_META = {
   'New Deal':       { c:'#5b7088', bg:'#eef1f5', label:'New Deal' },
-  'Quick UW':       { c:'#2f6df0', bg:'#e8f0fe', label:'Quick UW' },
   'Full UW':        { c:'#1b59c4', bg:'#e2ebfb', label:'Full UW' },
   'Excel UW':       { c:'#6b46e0', bg:'#ece6fd', label:'Excel UW' },
   'LOI Submitted':  { c:'#b87214', bg:'#fdf0d8', label:'LOI Submitted' },
@@ -62,6 +61,7 @@ const STAGE_META = {
 // Map legacy stage names (and Notion imports) onto the current set.
 const STAGE_MIGRATE = {
   'Needs UW':'New Deal', 'Needs Underwriting':'New Deal', 'New':'New Deal',
+  'Quick UW':'Full UW', // retired stage — fold existing Quick UW deals into Full UW
   'Underwritten':'Full UW', 'Underwriting':'Full UW',
   'Pass':'Dead', 'Passed':'Dead', 'Done':'Dead', 'Dead/Pass':'Dead',
 };

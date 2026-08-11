@@ -670,10 +670,8 @@ function DetailTabs({ tab, setTab, showProperties }) {
   const tabs = [
   { key: 'summary', label: 'Summary', icon: 'deal' },
   ...(showProperties ? [{ key: 'properties', label: 'Properties', icon: 'bank' }] : []),
-  { key: 'quickuw', label: 'Quick UW', icon: 'target' },
   { key: 'fulluw', label: 'Full UW', icon: 'calc' },
   { key: 'returns', label: 'Returns', icon: 'chart' },
-  { key: 'market', label: 'Property / Submarket Review', icon: 'pulse' },
   { key: 'location', label: 'Location', icon: 'search' },
   { key: 'notes', label: 'Notes', icon: 'note' }];
 
@@ -1027,14 +1025,6 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
                 color: (STAGE_META[deal.stage] || STAGE_META['New Deal']).c, cursor: 'pointer' }}>
                 {STAGE_ALL.map((s) => <option key={s} value={s}>{STAGE_META[s].label}</option>)}
               </select>
-              <span style={{ width: 1, height: 18, background: 'var(--line)', flex: 'none' }} />
-              {/* Analyst Screener (placeholder — not wired up yet) */}
-              <button type="button" onClick={() => {}} title="Analyst Screener — coming soon"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--line-2)',
-                  background: 'var(--panel)', color: 'var(--slate)', borderRadius: 7, padding: '6px 10px',
-                  fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}>
-                <Icon name="search" size={13} /> Analyst Screener
-              </button>
             </div>
           </div>
 
@@ -1259,9 +1249,6 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
 
             {/* right rail */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              {window.ICMemoButton &&
-                <window.ICMemoButton deal={deal} onRunMemo={onRunMemo} onRunMarketReview={onRunMarketReview} />
-              }
               <RailCard icon="target" title="Key Metrics">
                 <RailRow label="Ask Price" value={deal.askPrice ? fmtShort(deal.askPrice) : '—'} muted={!deal.askPrice} />
                 <RailRow label="UW Price" value={deal.purchasePrice ? fmtShort(deal.purchasePrice) : '—'} muted={!deal.purchasePrice} />
@@ -1302,19 +1289,11 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
           </div>
         }
 
-        {/* ===== QUICK UNDERWRITING ===== */}
-        {tab === 'quickuw' && window.QuickUnderwritingTab && <window.QuickUnderwritingTab deal={deal} set={set} />}
-
         {/* ===== FULL UNDERWRITING ===== */}
         {tab === 'fulluw' && window.FullUnderwritingTab && <window.FullUnderwritingTab deal={deal} set={set} propView={propView} setPropView={setPropView} setProperties={(arr) => patch(rollupProperties(arr))} excluded={excluded} setExcluded={setExcluded} stickyTop={sticky ? 44 : 0} />}
 
         {/* ===== RETURN METRICS ===== */}
         {tab === 'returns' && window.ReturnsTab && <window.ReturnsTab deal={deal} set={set} />}
-
-        {/* ===== PROPERTY / SUBMARKET REVIEW ===== */}
-        {tab === 'market' && window.MarketReviewTab &&
-        <window.MarketReviewTab deal={deal} onRun={onRunMarketReview} onImportCoStar={onImportCoStar} />
-        }
 
         {/* ===== LOCATION ===== */}
         {tab === 'location' &&

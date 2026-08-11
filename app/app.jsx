@@ -281,14 +281,6 @@ function DealCard({ d, onOpen, omMap, t12Map, rrMap, onOM, onT12, onRR, onPatch 
         </div>
       }
 
-      {/* Analyst Screener (placeholder — not wired up yet) */}
-      <button onClick={(e) => e.stopPropagation()} title="Analyst Screener — coming soon"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none',
-          color: 'var(--accent)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', padding: 0,
-          marginBottom: 10, fontFamily: 'var(--font)' }}>
-        <Icon name="search" size={12} /> Analyst Screener
-      </button>
-
       {/* Footer */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         paddingTop: 10, borderTop: '1px solid var(--line)', gap: 6 }}>
@@ -1839,7 +1831,6 @@ const NAV = [
 { key: 'pipeline', label: 'Pipeline', icon: 'board' },
 { key: 'loi', label: 'LOI Status', icon: 'flag' },
 { key: 'metrics', label: 'Metrics', icon: 'pulse' },
-{ key: 'ees', label: 'EES', icon: 'target' },
 { key: 'brokercalls', label: 'Broker Calls', icon: 'note' },
 { key: 'tasks', label: 'Tasks', icon: 'check' },
 { key: 'crm', label: 'CRM', icon: 'deal' },
@@ -3435,9 +3426,7 @@ ${text}`;
         sortKey={pipeSortKey} sortDir={pipeSortDir} onSortKeyChange={setPipeSortKey} onSortDirChange={setPipeSortDir}
         zebra={t.zebra} /> :
         view === 'loi' ? <LOIStatusView deals={loiDeals} onOpen={open} onPatch={patch} /> :
-        view === 'metrics' ? <MetricsView deals={liveDeals} onOpen={open} /> :
-        view === 'ees' ? (window.EESView ? <window.EESView deals={deals} onPatch={patch}
-          onOpen={(id) => { open(id); setView('pipeline'); }} /> : null) :
+        view === 'metrics' ? <MetricsView deals={liveDeals} allDeals={deals} onOpen={open} /> :
         view === 'brokercalls' ? <BrokerCallsView deals={liveDeals} onOpen={open} /> :
         view === 'dead' ? <DeadDealsView deals={deadDeals} onOpen={open} onPatch={patch}
         onBulkPatch={bulkPatch} onBulkDelete={bulkDelete} onReorder={reorderVisible}

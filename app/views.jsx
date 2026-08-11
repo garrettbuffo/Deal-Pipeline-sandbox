@@ -299,13 +299,84 @@ function windowMetrics(deals, days, endOffsetDays=0){
   };
 }
 
-function MetricsView({ deals, onOpen }){
-  const [days, setDays] = useStateV(365);
-  const cur = useMemoV(()=> windowMetrics(deals, days), [deals, days]);
-  const prev = useMemoV(()=> windowMetrics(deals, days, days), [deals, days]);
-  const isAll = days===99999;
-  const d = (a,b)=> isAll ? null : (a-b);
-  const rangeLabel = RANGES.find(r=>r.value===days).label;
+/* --- Metrics tab: calendar-period toggle (This Month/Quarter/Year), distinct from the trailing-window RANGES above --- */
+const PERIODS = [
+  { value:'month',   label:'This Month' },
+  { value:'quarter', label:'This Quarter' },
+  { value:'year',    label:'This Year' },
+  { value:'all',     label:'All time' },
+];
+// Underwritten price for a deal (portfolio-aware) — the "UW Price" total.
+const uwPriceOf = (d)=> Array.isArray(d.properties) && d.isPortfolio && d.properties.length>1
+  ? d.properties.reduce((s,p)=>s+(Number(p.purchasePrice)||0),0)
+  : (Number(d.purchasePrice)||0);
+// Current + previous calendar-period bounds, anchored to the app's TODAY.
+function periodBounds(period){
+  const y = TODAY.getFullYear(), m = TODAY.getMonth();
+  const end = new Date(TODAY.getTime() + DAY); // through end of today
+  if(period==='month')   return { start:new Date(y,m,1), end, prevStart:new Date(y,m-1,1), prevEnd:new Date(y,m,1) };
+  if(period==='quarter'){ const q=Math.floor(m/3)*3;
+                          return { start:new Date(y,q,1), end, prevStart:new Date(y,q-3,1), prevEnd:new Date(y,q,1) }; }
+  if(period==='year')    return { start:new Date(y,0,1), end, prevStart:new Date(y-1,0,1), prevEnd:new Date(y,0,1) };
+  return { start:null, end:null, prevStart:null, prevEnd:null }; // all time
+}
+function inRange(dateStr, start, end){
+  if(!dateStr || !start || !end) return false;
+  const t = parseD(dateStr).getTime();
+  return t >= start.getTime() && t < end.getTime();
+}
+// Same shape as windowMetrics(), but over an explicit [start,end) calendar range. null start = all time (no date filter).
+function rangeMetrics(deals, start, end){
+  const inR = (ds)=> !start ? !!ds : inRange(ds, start, end);
+  const entered = deals.filter(d=> inR(d.dateEntered));
+  const loiSub = deals.filter(d=> inR(d.dateLOISubmitted));
+  const loiSubOnMarket = loiSub.filter(d=> !d.offMarket);
+  const loiSubOffMarket = loiSub.filter(d=> d.offMarket);
+  const loiWon = deals.filter(d=> WON.includes(d.stage) && inR(d.dateUnderContract));
+  const loiLost = deals.filter(d=> d.stage==='LOI Lost' && inR(d.dateLost));
+  const offMarket = entered.filter(d=> d.offMarket);
+  const onMarket = entered.filter(d=> !d.offMarket);
+  const loiWonOffMarket = loiWon.filter(d=> d.offMarket);
+  const loiWonOnMarket = loiWon.filter(d=> !d.offMarket);
+  const sum = (arr,f)=> arr.reduce((s,d)=>s+(f(d)||0),0);
+  return {
+    entered: entered.length,
+    dollarEntered: sum(entered, uwPriceOf),
+    onMarket: onMarket.length,
+    loiSubmitted: loiSub.length,
+    loiSubmittedOnMarket: loiSubOnMarket.length,
+    loiSubmittedOffMarket: loiSubOffMarket.length,
+    loiWon: loiWon.length,
+    loiWonOffMarket: loiWonOffMarket.length,
+    loiWonOnMarket: loiWonOnMarket.length,
+    loiLost: loiLost.length,
+    offMarket: offMarket.length,
+    dollarSubmitted: sum(loiSub, d=> d.loiAmount || d.purchasePrice),
+    dollarWon: sum(loiWon, d=> d.loiAmount || d.purchasePrice),
+    convRate: loiSub.length ? loiWon.length / loiSub.length : 0,
+  };
+}
+
+function MetricsView({ deals, allDeals, onOpen }){
+  const [period, setPeriod] = useStateV('year');
+  const b = useMemoV(()=> periodBounds(period), [period]);
+  const isAll = period==='all';
+  const cur = useMemoV(()=> rangeMetrics(deals, b.start, b.end), [deals, b]);
+  const prev = useMemoV(()=> rangeMetrics(deals, b.prevStart, b.prevEnd), [deals, b]);
+  const d = (a,bb)=> isAll ? null : (a-bb);
+  const periodLabel = PERIODS.find(r=>r.value===period).label;
+
+  // Three mutually-exclusive status buckets over the selected period; uses ALL deals so dead deals are counted.
+  const src = allDeals || deals;
+  const cats = useMemoV(()=>{
+    const inP = isAll ? src : src.filter(dl=> inRange(dl.dateEntered, b.start, b.end));
+    const build = (arr)=> ({ n: arr.length, dollars: arr.reduce((s,dl)=>s+uwPriceOf(dl),0) });
+    return {
+      pipeline: build(inP.filter(dl=> isPipelineStage(dl.stage))),
+      loi:      build(inP.filter(dl=> isLOIStage(dl.stage))),
+      dead:     build(inP.filter(dl=> dl.stage==='Dead')),
+    };
+  }, [src, b, isAll]);
 
   // funnel steps
   const funnel = [
@@ -317,8 +388,8 @@ function MetricsView({ deals, onOpen }){
 
   // recent LOI activity list
   const loiActivity = deals
-    .filter(d=> d.dateLOISubmitted && inWindow(d.dateLOISubmitted, days))
-    .sort((a,b)=> b.dateLOISubmitted.localeCompare(a.dateLOISubmitted));
+    .filter(dl=> dl.dateLOISubmitted && (isAll || inRange(dl.dateLOISubmitted, b.start, b.end)))
+    .sort((a,bb)=> bb.dateLOISubmitted.localeCompare(a.dateLOISubmitted));
 
   // metro leaderboard — where are we actually submitting LOIs?
   const metroRank = useMemoV(()=>{
@@ -334,16 +405,38 @@ function MetricsView({ deals, onOpen }){
         <div>
           <h2 style={{ margin:0, fontSize:21, fontWeight:700, color:'var(--ink)' }}>Pipeline Metrics</h2>
           <p style={{ margin:'4px 0 0', fontSize:13.5, color:'var(--muted)' }}>
-            Activity & dollar volume — {isAll ? 'all time' : 'trailing ' + rangeLabel} as of {fmtDate(window.ALTUS_TODAY)}.
+            Activity & dollar volume — {isAll ? 'all time' : periodLabel} as of {fmtDate(window.ALTUS_TODAY)}.
           </p>
         </div>
-        <Seg value={days} onChange={setDays} options={RANGES}/>
+        <Seg value={period} onChange={setPeriod} options={PERIODS}/>
+      </div>
+
+      {/* Deal activity by status — count + underwritten price per bucket (dead deals included) */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14, marginBottom:16 }}>
+        {[
+          { label:'Deals in Pipeline', color:'#2f6df0', data:cats.pipeline, hint:'New Deal · Full UW · Excel UW' },
+          { label:'Deals at LOI',      color:'#b87214', data:cats.loi,      hint:'LOI Submitted · Under Contract · Purchased · Lost' },
+          { label:'Dead Deals',        color:'#8c7460', data:cats.dead,     hint:'Marked dead' },
+        ].map(c=>(
+          <div key={c.label} style={{ background:'var(--panel)', border:'1px solid var(--line)', borderLeft:'3px solid '+c.color,
+            borderRadius:'var(--radius-lg)', padding:'16px 18px', boxShadow:'var(--shadow)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <span style={{ fontSize:12.5, fontWeight:700, color:c.color, textTransform:'uppercase', letterSpacing:'.02em' }}>{c.label}</span>
+              <span className="num" style={{ fontSize:26, fontWeight:700, color:'var(--ink)' }}>{fmtNum(c.data.n)}</span>
+            </div>
+            <div style={{ display:'flex', alignItems:'baseline', justifyContent:'space-between', marginTop:10 }}>
+              <span style={{ fontSize:11.5, color:'var(--muted)' }}>Underwritten price</span>
+              <span className="num" style={{ fontSize:18, fontWeight:700, color:c.color }}>{fmtShort(c.data.dollars)}</span>
+            </div>
+            <div style={{ fontSize:11, color:'var(--faint)', marginTop:8 }}>{c.hint}</div>
+          </div>
+        ))}
       </div>
 
       {/* activity KPIs */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14 }}>
         <Kpi label="On-Market Deals" value={fmtNum(cur.onMarket)} icon="plus" accent="#6b7a8d"
-             delta={d(cur.onMarket,prev.onMarket)} sub={cur.entered ? fmtPct(cur.onMarket/cur.entered,0)+' of entered' : (isAll?'in pipeline':'vs prior '+rangeLabel)}/>
+             delta={d(cur.onMarket,prev.onMarket)} sub={cur.entered ? fmtPct(cur.onMarket/cur.entered,0)+' of entered' : (isAll?'in pipeline':'vs prior '+periodLabel)}/>
         <Kpi label="Off-Market Deals" value={fmtNum(cur.offMarket)} icon="lock" accent="var(--warn)"
              delta={d(cur.offMarket,prev.offMarket)} sub={cur.entered ? fmtPct(cur.offMarket/cur.entered,0)+' of entered' : 'sourced directly'}/>
         <Kpi label="Total UW Price" value={fmtShort(cur.dollarEntered)} icon="dollar" accent="var(--ink)"
@@ -387,7 +480,7 @@ function MetricsView({ deals, onOpen }){
 
       {/* funnel */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:16, marginTop:16, alignItems:'start' }}>
-        <Card title="Conversion Funnel" right={<span style={{ fontSize:12, color:'var(--muted)' }}>{isAll?'all time':rangeLabel}</span>}>
+        <Card title="Conversion Funnel" right={<span style={{ fontSize:12, color:'var(--muted)' }}>{isAll?'all time':periodLabel}</span>}>
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
             {funnel.map((f,i)=>{
               const prevVal = i>0 ? funnel[i-1].value : null;
