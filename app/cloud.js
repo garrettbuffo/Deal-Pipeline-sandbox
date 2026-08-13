@@ -83,17 +83,22 @@
     // through deleteCloudXxx, which forgets the affected ids immediately — so it never
     // trips this breaker.
     const knownIds = Object.keys(base);
-    if (knownIds.length) {
-      const missingCount = knownIds.filter((id) => !cloudById.has(id)).length;
-      const missingFraction = missingCount / knownIds.length;
-      if (missingCount >= 5 && missingFraction >= 0.25) {
-        return { items: localItems, changed: false, suspicious: true, dropped: missingCount, total: knownIds.length };
-      }
+    // Circuit breaker (tightened 2026-08): only refuse a read that came back COMPLETELY
+    // EMPTY while this browser had previously confirmed rows existed — the genuine
+    // broken/failed-read catastrophe (2026-07-08, e.g. an auth/RLS drop returning zero rows).
+    // A populated read that merely differs from a stale local baseline (after a data
+    // migration or id change) is trusted and adopted, since cloud is the single source of
+    // truth and the browser no longer holds a deal copy that could overwrite it — this also
+    // stops the false-positive "sync paused" banner a post-migration baseline used to trigger.
+    if (knownIds.length && rows.length === 0) {
+      return { items: localItems, changed: false, suspicious: true, dropped: knownIds.length, total: knownIds.length };
     }
 
     const result = rows.map((row) => fromRow(row));
     const toCommit = {};
-    rows.forEach((row) => { toCommit[String(row.id)] = fp(fromRow(row), row.position); });
+    // Fingerprint position by ARRAY INDEX (matching saveDeals), so a freshly adopted read
+    // isn't mistaken for "changed" and bounced back as a full re-upsert on the next save.
+    rows.forEach((row, i) => { toCommit[String(row.id)] = fp(fromRow(row), i); });
     const toForget = knownIds.filter((id) => !cloudById.has(id));
 
     if (Object.keys(toCommit).length) commitSynced(table, toCommit);

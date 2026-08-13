@@ -2496,7 +2496,10 @@ function TopToast({ toast, onClose }) {
 
 function AltusApp() {
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [deals, setDeals] = useS(() => migrateDeals(loadDeals()));
+  // Cloud mode: never seed deals from localStorage. The browser holds no persistent deal
+  // copy that could overwrite Supabase — start empty and load fresh from the cloud on every
+  // open. Local-only fallback (cloud disabled) still uses the localStorage cache.
+  const [deals, setDeals] = useS(() => (window.AltusCloud && window.AltusCloud.enabled) ? [] : migrateDeals(loadDeals()));
   const [view, setView] = useS('pipeline');
   const [openId, setOpenId] = useS(null);
   const [showSettings, setShowSettings] = useS(false);
@@ -2524,6 +2527,8 @@ function AltusApp() {
   const [session, setSession] = useS(cloud.requireLogin ? undefined : null); // undefined = still checking
   const [authBusy, setAuthBusy] = useS(false);
   const cloudLoaded = useR(false);
+  const [cloudReady, setCloudReady] = useS(false); // false until the first cloud reconcile completes (gates the pipeline render)
+  const skipNextSave = useR(false);                // set when adopting a cloud read, so it isn't echoed straight back as a save
   const saveTimer = useR(null);
   const firstPendingSaveAt = useR(null);   // bounds the debounce so continuous typing can't defer a save indefinitely
   const mainRef = useR(null);          // ref to <main> for scroll save/restore
@@ -2597,6 +2602,7 @@ function AltusApp() {
       cloudLoaded.current = false;
       contactsLoaded.current = false;
       todosLoaded.current = false;
+      setCloudReady(false);
     }
   }, [session]);
 
@@ -2615,9 +2621,10 @@ function AltusApp() {
     cloud.reconcileDeals(deals).then((result) => {
       if (!active) return;
       if (result.suspicious) {
-        console.error('[cloud] refusing to sync deals: the cloud read looks like it lost ' +
-          result.dropped + ' of ' + result.total + ' previously-synced deals. Leaving local data untouched.');
+        console.error('[cloud] refusing to sync deals: the cloud read came back empty while ' +
+          result.total + ' deals were previously known. Leaving state untouched.');
         setSaveState('conflict');
+        setCloudReady(true); // still render the app (with the warning) rather than hang on the splash
         return; // don't mark cloudLoaded — a later auth/session event gets another chance
       }
       cloudLoaded.current = true;
@@ -2630,9 +2637,11 @@ function AltusApp() {
         if (Object.keys(prevById).length) {
           pushActivity(buildDealActivity(prevById, items, new Date().toISOString()));
         }
+        skipNextSave.current = true; // adopting the cloud read must not bounce back as a save
         setDeals(items);
       }
-    }).catch((e) => console.warn('[cloud] load failed, using local data', e));
+      setCloudReady(true);
+    }).catch((e) => { console.warn('[cloud] load failed', e); setCloudReady(true); });
     return () => { active = false; };
   }, [session]);
 
@@ -2702,14 +2711,16 @@ function AltusApp() {
     }
   }, [contacts]);
 
-  // Persist deals: localStorage immediately + debounced cloud save with status tracking.
-  // localStorage here is purely a fast-load cache, not a source of truth that could ever
-  // be "restored" over Supabase — there is deliberately no UI path that lets local data
-  // override cloud (see cloud.reconcileDeals; the previous "restore from backup" buttons
-  // were removed for exactly this reason).
+  // Persist deals: in cloud mode we do NOT cache deals in localStorage at all — the browser
+  // holds no persistent copy that could ever be flushed over Supabase. Each change is written
+  // straight through to the cloud (debounced ~0.4s so typing isn't a request per keystroke),
+  // and only the deals that actually changed are upserted. localStorage is used solely as the
+  // store in local-only fallback mode when cloud is disabled.
   useE(() => {
     dealsRef.current = deals;
-    try { localStorage.setItem(LS_KEY, JSON.stringify(deals)); } catch (e) {}
+    if (!cloud.enabled) { try { localStorage.setItem(LS_KEY, JSON.stringify(deals)); } catch (e) {} }
+    // Adopting a cloud read updates `deals`; don't echo that straight back as a save.
+    if (skipNextSave.current) { skipNextSave.current = false; return; }
 
     if (cloud.enabled && (!cloud.requireLogin || session) && cloudLoaded.current) {
       setSaveState('dirty');
@@ -3291,6 +3302,9 @@ ${text}`;
   // ---- Login gate (only when cloud + REQUIRE_LOGIN are on) ----
   if (cloud.requireLogin && session === undefined) return <CloudSplash text="Connecting…" />;
   if (cloud.requireLogin && !session) return <LoginGate onSignIn={doSignIn} busy={authBusy} />;
+  // Cloud mode loads deals fresh from Supabase (no local cache) — show a splash until the
+  // first reconcile lands so the pipeline never flashes empty on the way in.
+  if (cloud.enabled && (!cloud.requireLogin || session) && !cloudReady) return <CloudSplash text="Loading your pipeline…" />;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
