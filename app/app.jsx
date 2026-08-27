@@ -227,6 +227,8 @@ function DealCard({ d, onOpen, omMap, t12Map, rrMap, onOM, onT12, onRR, onPatch 
   const m = computeMetrics(d);
   const meta = STAGE_META[d.stage] || STAGE_META['New Deal'];
   const caps = window.displayCaps ? window.displayCaps(d) : { goingIn: m.goingInCap, stab: m.stabilizedCap };
+  const fromExcel = window.hasExcelReturns ? window.hasExcelReturns(d) : false;
+  const R = fromExcel && window.dealReturns ? window.dealReturns(d) : null;
   const days = daysAgo(d.dateEntered);
   const brokerShort = d.broker ? d.broker.split(/[—\-·]/)[0].trim() : '';
 
@@ -248,6 +250,7 @@ function DealCard({ d, onOpen, omMap, t12Map, rrMap, onOM, onT12, onRR, onPatch 
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 'none' }}>
           {d.offMarket && <OffMarketTag size="sm" />}
+          {fromExcel && window.ExcelSourceTag && <window.ExcelSourceTag size="sm" syncedAt={R.syncedAt} />}
           <TypeTag type={d.type} />
         </div>
       </div>
@@ -258,7 +261,7 @@ function DealCard({ d, onOpen, omMap, t12Map, rrMap, onOM, onT12, onRR, onPatch 
       </div>
 
       {/* Key metrics */}
-      {(d.askPrice || caps.goingIn > 0 || caps.stab > 0) &&
+      {(d.askPrice || (fromExcel ? (R.irr != null || R.equityMultiple != null) : (caps.goingIn > 0 || caps.stab > 0))) &&
       <div style={{ display: 'flex', gap: 18, marginBottom: 12 }}>
           {d.askPrice ?
         <div>
@@ -266,6 +269,18 @@ function DealCard({ d, onOpen, omMap, t12Map, rrMap, onOM, onT12, onRR, onPatch 
               <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 2 }}>ask</div>
             </div> :
         null}
+          {fromExcel ? <React.Fragment>
+          {R.irr != null ?
+        <div>
+              <div className="num" style={{ fontSize: 15, fontWeight: 600, color: 'var(--accent-2)', lineHeight: 1 }}>{fmtPct(R.irr, 1)}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 2 }}>IRR · Excel</div>
+            </div> : null}
+          {R.equityMultiple != null ?
+        <div>
+              <div className="num" style={{ fontSize: 15, fontWeight: 600, color: 'var(--pos)', lineHeight: 1 }}>{R.equityMultiple.toFixed(2)}x</div>
+              <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 2 }}>equity mult.</div>
+            </div> : null}
+          </React.Fragment> : <React.Fragment>
           {caps.goingIn > 0.001 ?
         <div>
               <div className="num" style={{ fontSize: 15, fontWeight: 600, color: 'var(--accent-2)', lineHeight: 1 }}>{fmtPct(caps.goingIn, 1)}</div>
@@ -278,6 +293,7 @@ function DealCard({ d, onOpen, omMap, t12Map, rrMap, onOM, onT12, onRR, onPatch 
               <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 2 }}>stab. cap</div>
             </div> :
         null}
+          </React.Fragment>}
         </div>
       }
 
@@ -592,9 +608,9 @@ function sortValue(d, key) {
     case 'assignee':      return (Array.isArray(d.assignees) ? d.assignees.slice().sort().join(',') : '').toLowerCase();
     case 'askPrice':      return d.askPrice || 0;
     case 'purchasePrice': return d.purchasePrice || 0;
-    case 'stabilizedCap': return (window.displayCaps ? window.displayCaps(d).stab : computeMetrics(d).stabilizedCap) || 0;
-    case 'dealIRR':       { if (!window.hasUWInputs || !window.hasUWInputs(d)) return -1; const v = computeUW(d).irr; return v == null ? -1 : v; }
-    case 'avgYield':      { if (!window.hasUWInputs || !window.hasUWInputs(d)) return -1; const v = computeUW(d).avgYield; return v == null ? -1 : v; }
+    case 'stabilizedCap': { if (window.hasExcelReturns && window.hasExcelReturns(d)) return window.dealReturns(d).stabYOC || 0; return (window.displayCaps ? window.displayCaps(d).stab : computeMetrics(d).stabilizedCap) || 0; }
+    case 'dealIRR':       { if (window.hasExcelReturns && window.hasExcelReturns(d)) { const v = window.dealReturns(d).irr; return v == null ? -1 : v; } if (!window.hasUWInputs || !window.hasUWInputs(d)) return -1; const v = computeUW(d).irr; return v == null ? -1 : v; }
+    case 'avgYield':      { if (window.hasExcelReturns && window.hasExcelReturns(d)) { const v = window.dealReturns(d).stabYOC; return v == null ? -1 : v; } if (!window.hasUWInputs || !window.hasUWInputs(d)) return -1; const v = computeUW(d).avgYield; return v == null ? -1 : v; }
     case 'cfoDate':       return d.cfoDate || '';
     case 'lastActivity':  return lastActivityOf(d) || '';
     default:              return '';

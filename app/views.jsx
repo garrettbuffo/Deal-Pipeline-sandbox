@@ -29,7 +29,17 @@ function _computeDealPriority(deal) {
   }
 
   // 3. Highest Deal IRR  4. Highest YOC  6. Lowest Economic Vacancy
-  if (window.hasUWInputs && window.hasUWInputs(deal) && window.computeUW) {
+  // Excel-model returns win when a deal has been underwritten in Excel; otherwise use the
+  // Full UW DCF exactly as before.
+  if (window.hasExcelReturns && window.hasExcelReturns(deal)) {
+    const R = window.dealReturns(deal);
+    if (R.irr != null && R.irr > 0) {
+      score += R.irr * 300;
+      if (!topReason && R.irr >= 0.13)
+        topReason = { text: (R.irr * 100).toFixed(1) + '% IRR', urgency: R.irr >= 0.16 ? 'high' : 'mid' };
+    }
+    if (R.stabYOC != null && R.stabYOC > 0) score += R.stabYOC * 150;
+  } else if (window.hasUWInputs && window.hasUWInputs(deal) && window.computeUW) {
     try {
       const uw = window.computeUW(deal);
       if (uw.irr != null && uw.irr > 0) {

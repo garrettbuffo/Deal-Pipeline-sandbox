@@ -719,8 +719,15 @@ function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, 
   if (isPortfolio) return <PortfolioUWTab deal={deal} set={set} view={propView} setView={setPropView} setProperties={setProperties} excluded={excluded} setExcluded={setExcluded} stickyTop={stickyTop} />;
   const m = computeMetrics(deal);
   const uw = computeUW(deal);
+  const fromExcel = window.hasExcelReturns ? window.hasExcelReturns(deal) : false;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {fromExcel &&
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '11px 14px', borderRadius: 'var(--radius-lg)',
+        background: 'var(--accent-soft)', border: '1px solid var(--line-2)', color: 'var(--slate)', fontSize: 12.5, lineHeight: 1.5 }}>
+        <Icon name="calc" size={15} style={{ color: 'var(--accent-2)', flex: 'none', marginTop: 1 }} />
+        <span>This deal's reported returns come from the linked Excel model. The Full UW tab below is a screening estimate and is not the source of record for this deal.</span>
+      </div>}
       <MiniNotes deal={deal} set={set} />
       <PricingBasis deal={deal} set={set} m={m} />
       <IncomeVacancySection deal={deal} set={set} />

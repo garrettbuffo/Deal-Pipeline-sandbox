@@ -219,6 +219,22 @@ function OffMarketTag({ size='md', style }){
     </span>
   );
 }
+/* Marks headline returns sourced from the linked Excel model, not the Full UW tab */
+function ExcelSourceTag({ size='md', syncedAt, style }){
+  const pad = size==='sm' ? '2px 7px' : '3px 9px';
+  const fs = size==='sm' ? 10.5 : 11.5;
+  let when = null;
+  if (syncedAt) { try { when = fmtDate(String(syncedAt).slice(0,10)); } catch(e) { when = String(syncedAt).slice(0,10); } }
+  const tip = 'Returns pulled from the linked Excel model, not the Full UW tab' + (when && when !== '—' ? ' · synced ' + when : '');
+  return (
+    <span title={tip} style={{ display:'inline-flex', alignItems:'center', gap:5, padding:pad, borderRadius:999,
+      background:'var(--accent-soft)', color:'var(--accent-2)', fontSize:fs, fontWeight:700,
+      letterSpacing:'.02em', whiteSpace:'nowrap', lineHeight:1.3, ...style }}>
+      <Icon name="calc" size={size==='sm'?9:10} style={{ color:'var(--accent-2)' }}/>
+      * from Excel model
+    </span>
+  );
+}
 function TypeTag({ type }){
   const c = TYPE_META[type] || TYPE_META.Other;
   return (
@@ -420,6 +436,6 @@ Object.assign(window, {
   STAGES, STAGE_ALL, STAGE_META, PIPELINE_STAGES, LOI_STAGES,
   normalizeStage, isPipelineStage, isLOIStage, isDeadStage,
   TYPE_META, computeMetrics, ASSIGNEES, ASSIGNEE_COLOR, AssigneePicker,
-  Icon, StageBadge, StageBadgeSolid, TypeTag, OffMarketTag, OffMarketToggle, Avatar, Delta, Kpi, Seg, Bar, Donut, Card,
+  Icon, StageBadge, StageBadgeSolid, TypeTag, OffMarketTag, ExcelSourceTag, OffMarketToggle, Avatar, Delta, Kpi, Seg, Bar, Donut, Card,
   downloadCSV,
 });

@@ -625,7 +625,18 @@ function KpiStrip({ deal, m, propView, excluded }) {
     : isPortfolio ? (incProps.reduce((s, p) => s + (Number(p.purchasePrice) || 0), 0) || (incProps.length === deal.properties.length ? Number(deal.purchasePrice) || 0 : 0)) : deal.purchasePrice;
   const totalBasis = uw ? uw.basis : mBase.totalBasis;
 
-  const priceCells = [
+  // Headline returns come from the linked Excel model when the deal has one (single deals
+  // only; portfolios keep the combined Full-UW model). Everything is gated on `fromExcel`
+  // so non-Excel deals render exactly as before.
+  const fromExcel = !isPortfolio && window.hasExcelReturns ? window.hasExcelReturns(deal) : false;
+  const R = fromExcel && window.dealReturns ? window.dealReturns(deal) : null;
+
+  const priceCells = fromExcel ? [
+  { label: 'Ask Price', value: askSum ? fmtShort(askSum) : '—' },
+  { label: 'Offer Price', value: R.offerPrice ? fmtShort(R.offerPrice) : (uwSum ? fmtShort(uwSum) : '—'),
+    color: 'var(--ink)', sub: R.offerToAsk != null ? R.offerToAsk.toFixed(2) + 'x ask' : null },
+  { label: 'Going-In Cap*', value: fmtPct(R.goingInCap), color: R.goingInCap ? 'var(--accent)' : 'var(--faint)', sub: 'Excel model*' },
+  { label: 'Total Basis', value: fmtShort(totalBasis), color: totalBasis ? 'var(--ink)' : 'var(--faint)' }] : [
   { label: 'Ask Price', value: askSum ? fmtShort(askSum) : '—' },
   { label: 'UW Price', value: uwSum ? fmtShort(uwSum) : '—' },
   { label: 'Going-In Cap*', value: fmtPct(goingIn), color: goingIn ? 'var(--accent)' : 'var(--faint)',
@@ -634,12 +645,19 @@ function KpiStrip({ deal, m, propView, excluded }) {
     sub: (uw ? 'Yr 3 YOC · ' : '') + capSrc + '*' },
   { label: 'Total Basis', value: fmtShort(totalBasis), color: totalBasis ? 'var(--ink)' : 'var(--faint)' }];
 
-  // Returns only render once the Income & Economic Vacancy section is populated.
-  const retCells = uw ? [
+  // Returns render from the Excel model when present, else from the Full UW DCF once the
+  // Income & Economic Vacancy section is populated.
+  const retCells = fromExcel ? [
+  { label: 'Levered IRR', value: R.irr == null ? '—' : fmtPct(R.irr, 2), color: R.irr == null ? 'var(--faint)' : 'var(--pos)', ret: true },
+  { label: 'Equity Mult.', value: R.equityMultiple == null ? '—' : R.equityMultiple.toFixed(2) + 'x', color: 'var(--ink)', ret: true },
+  { label: 'Stabilized YoC', value: R.stabYOC == null ? '—' : fmtPct(R.stabYOC, 2), color: R.stabYOC == null ? 'var(--faint)' : 'var(--accent)', ret: true },
+  { label: 'DSCR Yr 1', value: R.dscr == null ? '—' : R.dscr.toFixed(2) + 'x', color: 'var(--ink)', ret: true },
+  { label: 'Hold', value: R.holdYears == null ? '—' : R.holdYears + ' yrs', color: 'var(--ink)', ret: true }] :
+  (uw ? [
   { label: 'Levered IRR', value: uw.irr == null ? '—' : (uw.irr * 100).toFixed(1) + '%', color: uw.irr == null ? 'var(--faint)' : 'var(--pos)', ret: true },
   { label: 'Equity Mult.', value: uw.equityMultiple == null ? '—' : uw.equityMultiple.toFixed(2) + 'x', color: 'var(--ink)', ret: true },
   { label: 'Avg Yield', value: uw.avgYield == null ? '—' : (uw.avgYield * 100).toFixed(1) + '%', color: uw.avgYield == null ? 'var(--faint)' : 'var(--accent)', ret: true }] :
-  [];
+  []);
   const cells = [...priceCells, ...retCells];
 
   return (
@@ -647,6 +665,11 @@ function KpiStrip({ deal, m, propView, excluded }) {
       {isPortfolio &&
       <div style={{ padding: '8px 16px 0', fontSize: 11, fontWeight: 600, color: 'var(--muted)' }}>
         Showing: <span style={{ color: 'var(--accent)' }}>{selProperty ? selProperty.name || 'Property ' + (selIdx + 1) : 'Combined (' + incProps.length + (incProps.length === deal.properties.length ? '' : ' of ' + deal.properties.length) + ')'}</span>
+      </div>}
+      {fromExcel &&
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px 0', flexWrap: 'wrap' }}>
+        {window.ExcelSourceTag && <window.ExcelSourceTag size="sm" syncedAt={R.syncedAt} />}
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>Reported returns are from the linked Excel model — the Full UW tab is a screening estimate.</span>
       </div>}
       <div style={{ display: 'flex', borderTop: '1px solid var(--line)', overflow: 'hidden' }}>
         {cells.map((c, i) =>
@@ -963,6 +986,11 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
     (lastNameRe && lastNameRe.test(deal.broker || ''));
   });
   const m = computeMetrics(deal);
+  // Excel-model returns + the Full UW screening numbers, for the source badge and the
+  // side-by-side comparison card (both only surfaced when the deal has an _uw block).
+  const dR = (window.hasExcelReturns && window.hasExcelReturns(deal)) ? window.dealReturns(deal) : null;
+  const dScreenUW = (dR && window.hasUWInputs && window.hasUWInputs(deal) && window.computeUW) ? window.computeUW(deal) : null;
+  const dScreenCaps = dR && window.displayCaps ? window.displayCaps(deal) : null;
   const capDelta = m.stabilizedCap - m.goingInCap;
   const hasDebt = !!deal.debt;
   const days = daysAgo(deal.dateEntered);
@@ -1254,6 +1282,24 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
                 <RailRow label="UW Price" value={deal.purchasePrice ? fmtShort(deal.purchasePrice) : '—'} muted={!deal.purchasePrice} />
                 <RailRow label="Total Basis" value={fmtShort(m.totalBasis)} muted={!m.totalBasis} />
               </RailCard>
+
+              {dR && dR.fromExcel && dScreenUW &&
+              <RailCard icon="calc" title="Screening vs Excel">
+                {[
+                  { k: 'Levered IRR', s: dScreenUW.irr == null ? '—' : (dScreenUW.irr * 100).toFixed(1) + '%', e: dR.irr == null ? '—' : fmtPct(dR.irr, 1) },
+                  { k: 'Equity Mult.', s: dScreenUW.equityMultiple == null ? '—' : dScreenUW.equityMultiple.toFixed(2) + 'x', e: dR.equityMultiple == null ? '—' : dR.equityMultiple.toFixed(2) + 'x' },
+                  { k: 'Stab. YoC', s: dScreenCaps && dScreenCaps.stab != null ? fmtPct(dScreenCaps.stab, 1) : '—', e: dR.stabYOC == null ? '—' : fmtPct(dR.stabYOC, 1) },
+                ].map((row, i) =>
+                <div key={i} style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, padding: '5px 0', borderTop: i ? '1px solid var(--line)' : 'none' }}>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>{row.k}</span>
+                  <span style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
+                    <span className="num" title="Full UW screening estimate" style={{ fontSize: 12.5, color: 'var(--slate)' }}>{row.s}</span>
+                    <span className="num" title="Excel model — source of record" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--accent-2)' }}>{row.e}</span>
+                  </span>
+                </div>
+                )}
+                <div style={{ fontSize: 10, color: 'var(--faint)', marginTop: 7 }}>Left: Full UW screening · Right: Excel model*</div>
+              </RailCard>}
 
               <RailCard icon="clock" title="Timeline">
                 <RailRow label="Date Entered" value={fmtDate(deal.dateEntered)} num={false} />

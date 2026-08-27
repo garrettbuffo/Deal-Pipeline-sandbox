@@ -393,6 +393,63 @@
     return { goingIn: m.goingInCap, stab: m.stabilizedCap, source: 'Quick UW' };
   }
 
+  // ---- Excel-model returns bridge -----------------------------------------
+  // A deal underwritten in the linked Excel model carries its outputs in data._uw
+  // (whole-number percents, plain multiples, integer dollars — written by the acquisition
+  // pipeline sync). These helpers expose those as the deal's HEADLINE returns, normalized
+  // into the app's native convention (percentages as decimal fractions, so the existing
+  // fmtPct/(*100) formatters render them unchanged). Everything is additive and gated on
+  // the presence of _uw: deals without it keep today's Full-UW behavior untouched.
+  function hasExcelReturns(d){ return !!(d && d._uw && d._uw.metrics && d._uw.metrics.dealIRR != null); }
+  function returnsSource(d){
+    if (d && (d.returnsSource === 'Excel Model' || d.returnsSource === 'Full UW')) return d.returnsSource;
+    return hasExcelReturns(d) ? 'Excel Model' : 'Full UW';
+  }
+  const _pctFrac = (v) => (v == null ? null : Number(v) / 100); // whole-percent -> decimal fraction
+  // Normalized headline returns for a deal, tagged by source. Excel numbers win when the
+  // deal has an _uw block (unless data.returnsSource explicitly forces 'Full UW').
+  function dealReturns(d){
+    const source = returnsSource(d);
+    const ask = Number(d && d.askPrice) || null;
+    if (source === 'Excel Model' && hasExcelReturns(d)) {
+      const u = d._uw, m = u.metrics, c = u.criteria || {};
+      const offer = u.offerPrice != null ? Number(u.offerPrice) : (Number(d.purchasePrice) || null);
+      return {
+        source: 'Excel Model', fromExcel: true,
+        irr: _pctFrac(m.dealIRR),
+        equityMultiple: m.equityMultiple != null ? Number(m.equityMultiple) : null,
+        goingInYOC: _pctFrac(m.goingInYOC),
+        stabYOC: _pctFrac(m.stabilizedYOC),
+        dscr: m.dscrY1 != null ? Number(m.dscrY1) : null,
+        goingInCap: _pctFrac(m.goingInCap),
+        holdYears: m.holdYears != null ? Number(m.holdYears) : null,
+        offerPrice: offer,
+        offerToAsk: c.offerToAsk != null ? Number(c.offerToAsk) : (ask && offer != null ? offer / ask : null),
+        rankable: c.rankable === true,
+        syncedAt: u.syncedAt || null,
+        modelStatus: u.modelStatus || null,
+      };
+    }
+    // Full UW (today's behavior) — derived from the DCF engine + cap bridge.
+    const uw = hasUWInputs(d) ? computeUW(d) : null;
+    const caps = displayCaps(d);
+    const offer = Number(d && d.purchasePrice) || null;
+    return {
+      source: caps.source, fromExcel: false,
+      irr: uw ? uw.irr : null,
+      equityMultiple: uw && uw.equityMultiple != null ? uw.equityMultiple : null,
+      goingInYOC: caps.goingIn,
+      stabYOC: caps.stab,
+      dscr: uw && uw.rows && uw.rows[1] ? uw.rows[1].dscr : null,
+      goingInCap: caps.goingIn,
+      holdYears: uw ? uw.hold : null,
+      offerPrice: offer,
+      offerToAsk: ask ? ((offer || 0) / ask) : null,
+      rankable: !!ask,
+      syncedAt: null, modelStatus: null,
+    };
+  }
+
   // ---- Portfolio combine: sum per-property UW models into one aggregate model ----
   // Each property is underwritten independently (own income/opex/financing/refi/assumptions);
   // this sums their year rows and re-derives portfolio-level IRR/equity multiple from the
@@ -472,5 +529,5 @@
     };
   }
 
-  Object.assign(window, { computeUW, computeLP, computeScenario, computeCombinedUW, inPlaceVacPct, hasUWInputs, displayCaps, irr, makeLoan, balanceAfter, pmt });
+  Object.assign(window, { computeUW, computeLP, computeScenario, computeCombinedUW, inPlaceVacPct, hasUWInputs, displayCaps, dealReturns, returnsSource, hasExcelReturns, irr, makeLoan, balanceAfter, pmt });
 })();
