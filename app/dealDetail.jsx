@@ -651,7 +651,7 @@ function KpiStrip({ deal, m, propView, excluded }) {
   { label: 'Levered IRR', value: R.irr == null ? '—' : fmtPct(R.irr, 2), color: R.irr == null ? 'var(--faint)' : 'var(--pos)', ret: true },
   { label: 'Equity Mult.', value: R.equityMultiple == null ? '—' : R.equityMultiple.toFixed(2) + 'x', color: 'var(--ink)', ret: true },
   { label: 'Stabilized YoC', value: R.stabYOC == null ? '—' : fmtPct(R.stabYOC, 2), color: R.stabYOC == null ? 'var(--faint)' : 'var(--accent)', ret: true },
-  { label: 'DSCR Yr 1', value: R.dscr == null ? '—' : R.dscr.toFixed(2) + 'x', color: 'var(--ink)', ret: true },
+  { label: 'Avg Yield', value: R.avgYield == null ? '—' : fmtPct(R.avgYield, 2), color: R.avgYield == null ? 'var(--faint)' : 'var(--accent)', ret: true },
   { label: 'Hold', value: R.holdYears == null ? '—' : R.holdYears + ' yrs', color: 'var(--ink)', ret: true }] :
   (uw ? [
   { label: 'Levered IRR', value: uw.irr == null ? '—' : (uw.irr * 100).toFixed(1) + '%', color: uw.irr == null ? 'var(--faint)' : 'var(--pos)', ret: true },

@@ -420,6 +420,7 @@
         equityMultiple: m.equityMultiple != null ? Number(m.equityMultiple) : null,
         goingInYOC: _pctFrac(m.goingInYOC),
         stabYOC: _pctFrac(m.stabilizedYOC),
+        avgYield: _pctFrac(m.avgYield),           // mean cash-on-cash (Excel Summary!G9)
         dscr: m.dscrY1 != null ? Number(m.dscrY1) : null,
         goingInCap: _pctFrac(m.goingInCap),
         holdYears: m.holdYears != null ? Number(m.holdYears) : null,
