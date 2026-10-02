@@ -79,7 +79,8 @@ function PricingBasis({ deal, set, m }) {
     <Card>
       <SectionHead icon="bank" title="Pricing & Basis" desc="Acquisition pricing — feeds the cap-rate math and the cash-flow model." />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: '16px 22px', marginTop: 16 }}>
-        <div><Lbl>Units</Lbl><FieldInput value={deal.units} onChange={(v) => set('units', Number(v) || 0)} align="left" /></div>
+        <div><Lbl>Units</Lbl><FieldInput value={deal.units} align="left"
+          onChange={(v) => (deal.rentRoll && deal.incomeFromRR !== false && window.overrideRentRoll ? window.overrideRentRoll(deal, set, 'units', Number(v) || 0) : set('units', Number(v) || 0))} /></div>
         <div><Lbl>Vintage</Lbl>
           <input value={deal.vintage || ''} onChange={(e) => set('vintage', e.target.value)} placeholder="Year built"
             style={{ border: '1px solid var(--line-2)', borderRadius: 7, padding: '0 10px', background: 'var(--panel)',
@@ -120,11 +121,11 @@ function Note({ children }) {
   return <div className="num" style={{ fontSize: 11, color: 'var(--faint)', marginTop: 3 }}>{children}</div>;
 }
 // One vacancy line with paired % / $ inputs (editing either updates the stored $)
-function VacLine({ label, value, gpr, onChange }) {
+function VacLine({ label, value, gpr, onChange, note }) {
   const pct = gpr > 0 ? (value / gpr) * 100 : 0;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 84px 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
-      <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>{label}</span>
+      <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>{label}</span>{note && <Note>{note}</Note>}</div>
       <FieldInput value={Math.round(pct * 10) / 10} suffix="%" align="left" onChange={(v) => onChange(gpr > 0 ? Math.round((num(v)) / 100 * gpr) : 0)} />
       <FieldInput value={value} prefix="$" onChange={(v) => onChange(num(v))} />
     </div>
@@ -158,15 +159,11 @@ function LinkedFigure({ value }) {
     </div>);
 }
 
-// Vacancy line shown read-only while the rent roll drives it.
-function VacLineLinked({ label, value, gpr, note }) {
-  const box = { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', height: 34, padding: '0 10px', borderRadius: 7, border: '1px dashed var(--line-2)', background: 'var(--panel-3)' };
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 84px 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
-      <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>{label}</span>{note && <Note>{note}</Note>}</div>
-      <div className="num" style={{ ...box, fontSize: 12.5, color: 'var(--slate)' }}>{gpr > 0 ? (value / gpr * 100).toFixed(1) + '%' : '—'}</div>
-      <div className="num" style={{ ...box, fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{moneyFull(value)}</div>
-    </div>);
+// Under a rent-roll-driven line: where the figure comes from, or that it was typed over (with a reset).
+function RROverrideNote({ deal, set, field, text }) {
+  if (!(deal.rrOverride || {})[field]) return <span>{text} · rent roll</span>;
+  return <span style={{ color: 'var(--warn)' }}>overridden · <button type="button" onClick={() => window.overrideRentRoll(deal, set, field, undefined)}
+    style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 11, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>use rent roll</button></span>;
 }
 
 /* Market rents by unit type — the template's Property Info "Market Rents" block. */
@@ -187,8 +184,9 @@ function MarketRentsBlock({ deal, set, pr }) {
           <Lbl>Market Rents by Unit Type</Lbl>
         </button>
         <span style={{ fontSize: 11.5, color: 'var(--faint)', marginTop: -5 }}>
-          {pr.units} units from the rent roll · loss to lease {moneyFull(pr.ltlPerUnit)}/unit ({pr.ltlPct == null ? '—' : (pr.ltlPct * 100).toFixed(1) + '%'})
+          {pr.units} units on the rent roll{(deal.rrOverride || {}).units && Number(deal.units) !== pr.units ? ' · scaled to ' + deal.units + ' property units' : ''} · loss to lease {moneyFull(pr.ltlPerUnit)}/unit ({pr.ltlPct == null ? '—' : (pr.ltlPct * 100).toFixed(1) + '%'})
         </span>
+        {linked && window.GprBasisPicker && <span style={{ marginTop: -5 }}><window.GprBasisPicker deal={deal} set={set} compact /></span>}
         <button type="button" onClick={() => (linked ? set('incomeFromRR', false) : set({ incomeFromRR: true, ...window.rentRollFields({ ...deal, incomeFromRR: true }) }))}
           style={{ marginLeft: 'auto', marginTop: -5, border: '1px solid var(--line-2)', background: 'var(--panel)', color: 'var(--slate)', borderRadius: 6, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}>
           {linked ? 'Enter income by hand' : 'Price from rent roll'}</button>
@@ -207,7 +205,9 @@ function MarketRentsBlock({ deal, set, pr }) {
               <div style={c}>{moneyFull(t.inPlace)}</div>
               <div style={{ ...c, color: 'var(--muted)' }}>{psf(t.inPlace, t.sf)}</div>
               <div style={c} title={'Default ' + moneyFull(t.dflt) + ' (' + t.dfltSrc + ')'}>
-                <FieldInput value={t.overridden ? ov[t.type] : ''} placeholder={Math.round(t.dflt).toLocaleString('en-US')} onChange={(v) => setMkt(t.type, v)} prefix="$" />
+                {pr.basis === 'manual'
+                  ? <span className="num" style={{ fontWeight: 600, color: 'var(--ink)' }}>{moneyFull(t.market)}</span>
+                  : <FieldInput value={t.overridden ? ov[t.type] : ''} placeholder={Math.round(t.dflt).toLocaleString('en-US')} onChange={(v) => setMkt(t.type, v)} prefix="$" />}
               </div>
               <div style={{ ...c, color: 'var(--muted)' }}>{psf(t.market, t.sf)}</div>
             </div>))}
@@ -221,7 +221,7 @@ function MarketRentsBlock({ deal, set, pr }) {
             <div style={{ ...c, color: 'var(--muted)' }}>{psf(pr.avgMkt, pr.avgSf)}</div>
           </div>
           <div style={{ fontSize: 11, color: 'var(--faint)', marginTop: 6 }}>
-            Blank market rent = the rent roll's market rent, floored at the type's average in-place lease. Annual income {moneyFull(pr.inPlaceAnnual)} in-place vs {moneyFull(pr.gprAnnual)} at market.
+            {pr.basis === 'manual' ? 'Every unit at the manual average rate.' : pr.basis === 'market' ? "Blank market rent = the rent roll's market rent, floored at the type's average in-place lease." : 'Blank market rent = the ' + (pr.basis === 'max' ? 'max' : 'top 25%') + ' in-place lease for the type.'} Annual income {moneyFull(pr.inPlaceAnnual)} in-place vs {moneyFull(pr.gprAnnual)} at market.
           </div>
         </div>
       </div>}
@@ -298,10 +298,12 @@ function IncomeVacancySection({ deal, set, onT12Upload, t12Data }) {
             <span style={{ fontSize: 9.5, color: 'var(--faint)', fontWeight: 600, textTransform: 'uppercase', textAlign: 'center' }}>Annual $</span>
           </div>
           {rrLinked
-            ? <VacLineLinked label="Physical Vacancy" value={phys} gpr={gpr} note={(pr.units - Math.round(pr.occ * pr.units)) + ' vacant at in-place rent'} />
+            ? <VacLine label="Physical Vacancy" value={phys} gpr={gpr} onChange={(v) => window.overrideRentRoll(deal, set, 'physVacLoss', v)}
+                note={<RROverrideNote deal={deal} set={set} field="physVacLoss" text={(pr.units - Math.round(pr.occ * pr.units)) + ' vacant at in-place rent'} />} />
             : <VacLine label="Physical Vacancy" value={phys} gpr={gpr} onChange={(v) => set('physVacLoss', v)} />}
           {rrLinked
-            ? <VacLineLinked label="Loss to Lease" value={ltl} gpr={gpr} note="market vs avg in-place" />
+            ? <VacLine label="Loss to Lease" value={ltl} gpr={gpr} onChange={(v) => window.overrideRentRoll(deal, set, 'lossToLease', v)}
+                note={<RROverrideNote deal={deal} set={set} field="lossToLease" text="market vs avg in-place" />} />
             : <VacLine label="Loss to Lease" value={ltl} gpr={gpr} onChange={(v) => set('lossToLease', v)} />}
           <VacLine label="Concessions & Bad Debt" value={comb} gpr={gpr} onChange={setComb} />
           <div style={row}>
@@ -856,23 +858,6 @@ function PropertyFullUW({ property, onChange }) {
   );
 }
 
-function MiniNotes({ deal, set }) {
-  return (
-    <Card>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--muted)', letterSpacing: '.04em', textTransform: 'uppercase' }}>Notes</div>
-        <div style={{ fontSize: 10.5, color: 'var(--faint)' }}>Synced with Summary &amp; Notes tabs</div>
-      </div>
-      <textarea value={deal.notes || ''} onChange={(e) => set('notes', e.target.value)}
-        placeholder="Add notes — underwriting rationale, broker conversations, pricing guidance, next steps…"
-        style={{ width: '100%', minHeight: 60, resize: 'vertical', border: '1px solid var(--line-2)', borderRadius: 7,
-          padding: '8px 10px', background: 'var(--panel)', fontSize: 12.5, color: 'var(--ink)', fontFamily: 'var(--font)', boxSizing: 'border-box' }}
-        onFocus={(e) => { e.target.style.borderColor = 'var(--accent)'; e.target.style.boxShadow = '0 0 0 3px var(--accent-soft)'; }}
-        onBlur={(e) => { e.target.style.borderColor = 'var(--line-2)'; e.target.style.boxShadow = 'none'; }} />
-    </Card>
-  );
-}
-
 /* ───────────── Portfolio: Full UW tab wrapper ───────────── */
 function PortfolioUWTab({ deal, set, view, setView, setProperties, excluded = {}, setExcluded, stickyTop = 0 }) {
   const props = deal.properties || [];
@@ -892,7 +877,6 @@ function PortfolioUWTab({ deal, set, view, setView, setProperties, excluded = {}
   const safeIdx = idx != null && props[idx] ? idx : null;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <MiniNotes deal={deal} set={set} />
       <PropertyUWSwitcher props={props} view={view} setView={setView} />
       {safeIdx != null &&
         <div style={{ position: 'sticky', top: stickyTop, zIndex: 12, display: 'flex', alignItems: 'center', gap: 10,
@@ -955,7 +939,6 @@ function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, 
         <Icon name="calc" size={15} style={{ color: 'var(--accent-2)', flex: 'none', marginTop: 1 }} />
         <span>This deal's reported returns come from the linked Excel model. The Full UW tab below is a screening estimate and is not the source of record for this deal.</span>
       </div>}
-      <MiniNotes deal={deal} set={set} />
       <PricingBasis deal={deal} set={set} m={m} />
       <IncomeVacancySection deal={deal} set={set} onT12Upload={onT12Upload} t12Data={t12Data} />
       <AcqFinancingSection deal={deal} set={set} uw={uw} />

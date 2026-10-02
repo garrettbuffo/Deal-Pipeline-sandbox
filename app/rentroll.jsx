@@ -57,22 +57,37 @@ function rentRollMatrix(units) {
   return { rows, total };
 }
 
-// Underwritten market rent by unit type, as the template's Property Info "Market Rents" block:
-// the rent roll's market rent for the type, unless it sits below the type's average in-place
-// lease, in which case in-place is the floor. Any type can be overridden (deal.marketRents).
+// GPR basis: what each unit is priced at for gross potential rent.
+const GPR_BASES = [
+  { key: 'market', label: 'Market rent' },
+  { key: 'max', label: 'Max in-place rent' },
+  { key: 'top25', label: 'Top 25% in-place rent' },
+  { key: 'manual', label: 'Manual average rate' },
+];
+
+// Underwritten market rent by unit type, as the template's Property Info "Market Rents" block.
+// Basis 'market': the rent roll's market rent for the type, floored at the type's average in-place
+// lease. 'max' / 'top25': that in-place benchmark per type. 'manual': one monthly average for every
+// unit. A per-type override (deal.marketRents) wins on any basis except manual.
 function rentRollPricing(deal) {
   const units = deal && deal.rentRoll && Array.isArray(deal.rentRoll.units) ? deal.rentRoll.units : [];
   if (!units.length) return null;
+  const basis = GPR_BASES.some((b) => b.key === deal.gprBasis) ? deal.gprBasis : 'market';
+  const manual = Number(deal.gprManualRate) > 0 ? Number(deal.gprManualRate) : null;
   const ov = deal.marketRents || {};
   const types = rentRollMatrix(units).rows.map((r) => {
     const rrMkt = r.avgMk != null && r.avgMk > 0 ? r.avgMk : null;
     const inPlace = r.avgIn;
     const useRR = rrMkt != null && (inPlace == null || rrMkt >= inPlace);
-    const dflt = useRR ? rrMkt : (inPlace != null ? inPlace : 0);
+    const mktDflt = useRR ? rrMkt : (inPlace != null ? inPlace : 0);
+    let dflt = mktDflt, dfltSrc = useRR ? 'rent roll market' : rrMkt == null ? 'no market on roll · avg in-place' : 'market below in-place · avg in-place';
+    if (basis === 'max' && r.max != null) { dflt = r.max; dfltSrc = 'max in-place'; }
+    if (basis === 'top25' && r.top25 != null) { dflt = r.top25; dfltSrc = 'top 25% in-place'; }
+    if (basis === 'manual') { dflt = manual != null ? manual : mktDflt; dfltSrc = manual != null ? 'manual average rate' : 'enter a manual rate'; }
     const o = Number(ov[r.type]);
-    return { type: r.type, units: r.units, occUnits: r.occUnits, vac: r.units - r.occUnits, sf: r.avgSf, inPlace, rrMkt, dflt,
-      dfltSrc: useRR ? 'rent roll market' : rrMkt == null ? 'no market on roll · avg in-place' : 'market below in-place · avg in-place',
-      market: o > 0 ? o : dflt, overridden: o > 0 };
+    const own = basis !== 'manual' && o > 0;
+    return { type: r.type, units: r.units, occUnits: r.occUnits, vac: r.units - r.occUnits, sf: r.avgSf, inPlace, rrMkt, dflt, dfltSrc,
+      market: own ? o : dflt, overridden: own };
   });
   const N = types.reduce((s, t) => s + t.units, 0);
   const sum = (f) => types.reduce((s, t) => s + f(t), 0);
@@ -85,19 +100,51 @@ function rentRollPricing(deal) {
   const avgIn = N ? sum((t) => t.units * (t.inPlace != null ? t.inPlace : 0)) / N : 0;
   const avgMkt = N ? gprM / N : 0;
   const sfN = sum((t) => (t.sf ? t.units : 0));
-  return { types, units: N, occ: N ? sum((t) => t.occUnits) / N : 0, avgSf: sfN ? sum((t) => (t.sf ? t.sf * t.units : 0)) / sfN : null,
+  return { basis, manual, types, units: N, occ: N ? sum((t) => t.occUnits) / N : 0, avgSf: sfN ? sum((t) => (t.sf ? t.sf * t.units : 0)) / sfN : null,
     avgIn, avgMkt, ltlPerUnit: avgMkt - avgIn, ltlPct: avgMkt ? 1 - avgIn / avgMkt : null,
     inPlaceAnnual: Math.round(avgIn * N * 12), gprAnnual: Math.round(gprM * 12), physVacLoss: Math.round(physM * 12), lossToLease: Math.round(ltlM * 12) };
 }
-// The Full UW income fields the rent roll drives while the deal is linked to it.
+// The Full UW income fields the rent roll drives while the deal is linked to it. Fields the user
+// has typed over (deal.rrOverride) are left alone. When the property's unit count is overridden
+// (an incomplete roll), the rent roll's dollars scale to it: missing units are assumed average.
 function rentRollFields(deal) {
   const p = rentRollPricing(deal);
   if (!p || (deal && deal.incomeFromRR === false)) return {};
-  return { units: p.units, gprAnnual: p.gprAnnual, physVacLoss: p.physVacLoss, lossToLease: p.lossToLease };
+  const ovr = deal.rrOverride || {};
+  const n = ovr.units && Number(deal.units) > 0 ? Number(deal.units) : p.units;
+  const k = p.units ? n / p.units : 1;
+  const out = { gprAnnual: Math.round(p.gprAnnual * k) };
+  if (!ovr.units) out.units = p.units;
+  if (!ovr.physVacLoss) out.physVacLoss = Math.round(p.physVacLoss * k);
+  if (!ovr.lossToLease) out.lossToLease = Math.round(p.lossToLease * k);
+  return out;
 }
 // Apply a change and, if the deal is linked to its rent roll, re-derive the income fields with it.
 function setWithRentRoll(deal, set, changes) {
   set({ ...changes, ...rentRollFields({ ...deal, ...changes }) });
+}
+// Type over one rent-roll-driven field (true) or hand it back to the rent roll (false).
+function overrideRentRoll(deal, set, field, value) {
+  const rrOverride = { ...(deal.rrOverride || {}) };
+  if (value === undefined) delete rrOverride[field]; else rrOverride[field] = true;
+  setWithRentRoll(deal, set, { rrOverride, ...(value === undefined ? {} : { [field]: value }) });
+}
+
+/* GPR basis picker (+ manual monthly rate), shared by the Rent Roll tab and Full UW. */
+function GprBasisPicker({ deal, set, compact }) {
+  const basis = GPR_BASES.some((b) => b.key === deal.gprBasis) ? deal.gprBasis : 'market';
+  const sel = { height: compact ? 30 : 34, border: '1px solid var(--line-2)', borderRadius: 7, padding: '0 10px', background: 'var(--panel)', fontSize: 12.5, fontFamily: 'var(--font)', color: 'var(--ink)', cursor: 'pointer' };
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>GPR basis</span>
+      <select value={basis} onChange={(e) => setWithRentRoll(deal, set, { gprBasis: e.target.value })} style={sel} aria-label="GPR basis">
+        {GPR_BASES.map((b) => <option key={b.key} value={b.key}>{b.label}</option>)}
+      </select>
+      {basis === 'manual' && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <FieldInput value={deal.gprManualRate} onChange={(v) => setWithRentRoll(deal, set, { gprManualRate: v })} prefix="$" width={120} placeholder="avg / unit" />
+        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>/ unit / mo</span>
+      </span>}
+    </div>);
 }
 
 // Sandbox preview only: a plausible roll sized to the deal so the layout can be reviewed visually.
@@ -141,6 +188,52 @@ function RRText({ value, onCommit, width, placeholder, type }) {
 }
 function RRNum({ value, onCommit, width }) {
   return <RRText value={value == null ? '' : String(value)} width={width || 84} onCommit={(t) => { const n = Number(String(t).replace(/[$,\s]/g, '')); onCommit(t === '' || isNaN(n) ? null : Math.round(n)); }} />;
+}
+
+/* One rent-roll-driven figure: shows the derived value, can be typed over, and resets to the roll. */
+function RROverrideField({ deal, set, field, label, derived, sub, prefix }) {
+  const own = !!(deal.rrOverride || {})[field];
+  return (
+    <div style={{ minWidth: 150 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: 5 }}>{label}</div>
+      <FieldInput value={deal[field]} onChange={(v) => overrideRentRoll(deal, set, field, v === '' ? 0 : v)} prefix={prefix} />
+      <div style={{ fontSize: 10.5, marginTop: 4, color: own ? 'var(--warn)' : 'var(--faint)' }}>
+        {own
+          ? <span>Overridden · roll {derived} · <button type="button" onClick={() => overrideRentRoll(deal, set, field, undefined)}
+              style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 10.5, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>use rent roll</button></span>
+          : sub}
+      </div>
+    </div>);
+}
+
+/* What the rent roll sends to Full UW: GPR basis, unit count and vacancy, each overridable. */
+function RRIncomePanel({ deal, set, pr, linked }) {
+  const ovr = deal.rrOverride || {};
+  const k = ovr.units && Number(deal.units) > 0 && pr.units ? Number(deal.units) / pr.units : 1;
+  return (
+    <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, border: '1px solid ' + (linked ? 'var(--accent-soft)' : 'var(--line)'), background: linked ? 'var(--panel)' : 'var(--panel-2)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>Full UW income from this rent roll</span>
+        {linked && <GprBasisPicker deal={deal} set={set} compact />}
+        <button type="button" style={{ ...R_BTN, marginLeft: 'auto', padding: '4px 10px' }}
+          onClick={() => (linked ? set('incomeFromRR', false) : set({ incomeFromRR: true, ...rentRollFields({ ...deal, incomeFromRR: true }) }))}>
+          {linked ? 'Enter income by hand' : 'Link to Full UW'}</button>
+      </div>
+      {linked ? <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 12, alignItems: 'flex-start' }}>
+        <RROverrideField deal={deal} set={set} field="units" label="Property Units" derived={pr.units}
+          sub={pr.units + ' on the rent roll'} />
+        <div style={{ minWidth: 150 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: 5 }}>Gross Potential Rent</div>
+          <div className="num" style={{ height: 34, display: 'flex', alignItems: 'center', fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>{rMoney(deal.gprAnnual)}</div>
+          <div style={{ fontSize: 10.5, marginTop: 4, color: 'var(--faint)' }}>{rMoney(pr.avgMkt)} avg / unit / mo{k !== 1 ? ' · scaled to ' + deal.units + ' units' : ''}</div>
+        </div>
+        <RROverrideField deal={deal} set={set} field="physVacLoss" label="Physical Vacancy" prefix="$" derived={rMoney(pr.physVacLoss * k)}
+          sub={(pr.units - Math.round(pr.occ * pr.units)) + ' vacant at in-place rent'} />
+        <RROverrideField deal={deal} set={set} field="lossToLease" label="Loss to Lease" prefix="$" derived={rMoney(pr.lossToLease * k)}
+          sub={pr.ltlPct == null ? '' : rPct(pr.ltlPct) + ' · market vs avg in-place'} />
+      </div>
+      : <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Full UW income is entered by hand, not from this rent roll.</div>}
+    </div>);
 }
 
 function RentRollTab({ deal, set, onRRUpload, rrData }) {
@@ -253,15 +346,7 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 12, padding: '9px 12px', borderRadius: 8, background: linked ? 'var(--accent-soft)' : 'var(--panel-2)', fontSize: 12, color: 'var(--slate)' }}>
-          <Icon name={linked ? 'check' : 'lock'} size={13} style={{ color: linked ? 'var(--accent-2)' : 'var(--muted)' }} />
-          {linked
-            ? <span>Feeds Full UW: GPR <b className="num">{rMoney(pr.gprAnnual)}</b> · physical vacancy <b className="num">{rMoney(pr.physVacLoss)}</b> · loss to lease <b className="num">{rMoney(pr.lossToLease)}</b>. Set market rents by unit type in Full UW.</span>
-            : <span>Full UW income is entered by hand, not from this rent roll.</span>}
-          <button type="button" style={{ ...R_BTN, marginLeft: 'auto', padding: '4px 10px' }}
-            onClick={() => (linked ? set('incomeFromRR', false) : set({ incomeFromRR: true, ...rentRollFields({ ...deal, incomeFromRR: true }) }))}>
-            {linked ? 'Unlink' : 'Link to Full UW'}</button>
-        </div>
+        <RRIncomePanel deal={deal} set={set} pr={pr} linked={linked} />
       </Card>
 
       <Card>
@@ -296,4 +381,4 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
     </div>);
 }
 
-Object.assign(window, { RentRollTab, rentRollMatrix, rentRollPricing, rentRollFields, setWithRentRoll, percentileInc });
+Object.assign(window, { RentRollTab, rentRollMatrix, rentRollPricing, rentRollFields, setWithRentRoll, overrideRentRoll, GprBasisPicker, GPR_BASES, percentileInc });
