@@ -3,7 +3,7 @@ const { useState: useStateV, useMemo: useMemoV } = React;
 
 /* ============================ Priority Deals Widget ============================ */
 // Ranks active deals by: CFO Date proximity → closeness to guidance → IRR → YOC → vintage → low vacancy
-const PRIORITY_ACTIVE_STAGES = ['New Deal', 'Quick UW', 'Full UW', 'Excel UW', 'LOI Submitted', 'Under Contract'];
+const PRIORITY_ACTIVE_STAGES = ['New Deal', 'Claude UW', 'Quick UW', 'Full UW', 'Excel UW', 'LOI Submitted', 'Under Contract'];
 
 function _computeDealPriority(deal) {
   const today = new Date(window.ALTUS_TODAY + 'T12:00:00');

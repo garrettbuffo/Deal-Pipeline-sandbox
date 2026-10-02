@@ -239,4 +239,20 @@ function ExpenseBreakout({ deal, set, inPlaceEGI, stabEGI, onT12Upload, t12Data 
     </div>);
 }
 
-Object.assign(window, { ExpenseBreakout, altusPlaybook, t12ByCategory, t12OpexLines, stabOpexFor, OPEX_LINES, useOpenState });
+// Folder import: fill a new deal's stabilized expense lines from the Altus playbook using its
+// T-12 per unit (when one was read). Needs units and GPR; otherwise the deal is left as is.
+function applyImportPlaybook(d) {
+  const units = lNum(d.units);
+  if (!units || !(lNum(d.gprAnnual) > 0) || (d.uwOpex && d.uwOpex.mode === 'lines')) return d;
+  const t12 = t12OpexLines(d);
+  const t12pu = t12 ? OPEX_LINES.reduce((o, l) => { if (!l.pct) o[l.key] = lNum(t12[l.key]) / units; return o; }, {}) : null;
+  const uw = window.computeUW ? window.computeUW(d) : null;
+  const egi = uw && uw.rows[1] ? uw.rows[1].egi : 0;
+  const r = altusPlaybook({ t12pu, units, vintage: d.vintage, egi, price: lNum(d.purchasePrice), tier: 'secondary', taxMethod: 'prelim', taxRate: '',
+    vacancyElevated: uw ? uw.inPlaceEconVac > 0.15 : false });
+  const fixed = Object.keys(r.lines).reduce((s, k) => s + lNum(r.lines[k]), 0);
+  return { ...d, uwOpex: { mode: 'lines', lines: r.lines, mgmtPct: r.mgmtPct, notes: r.notes, source: 'playbook' },
+    marketOpexPerUnit: Math.round((fixed + r.mgmtPct / 100 * egi) / units) };
+}
+
+Object.assign(window, { applyImportPlaybook, ExpenseBreakout, altusPlaybook, t12ByCategory, t12OpexLines, stabOpexFor, OPEX_LINES, useOpenState });

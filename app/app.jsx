@@ -1451,13 +1451,14 @@ function SubmarketTable({ deals, onOpen, onPatch, omMap, t12Map, rrMap, onOM, on
   );
 }
 
-function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM, onT12, onRR, onBulkPatch, onBulkDelete, onReorder, omMap, t12Map, rrMap, zebra, sortKey, sortDir, onSortKeyChange, onSortDirChange, taskApi }) {
+function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM, onT12, onRR, onBulkPatch, onBulkDelete, onReorder, omMap, t12Map, rrMap, zebra, sortKey, sortDir, onSortKeyChange, onSortDirChange, taskApi, onImportDeal }) {
   const [q, setQ] = useS('');
   const [type, setType] = useS('All');
   const [stage, setStage] = useS('All');
   const [offMarketOnly, setOffMarketOnly] = useS(false);
   const [mode, setMode] = useS('table');
   const [adding, setAdding] = useS(false);
+  const [bulk, setBulk] = useS(false);
   const [importMsg, setImportMsg] = useS('');
   const [groupBy, setGroupBy] = useS('none'); // 'none' = by stage, 'market' = by submarket
   const importRef = useR(null);
@@ -1530,6 +1531,13 @@ function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM,
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {onImportDeal && window.BulkImportModal &&
+          <button onClick={() => setBulk(true)} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px',
+            border: '1px solid var(--line-2)', borderRadius: 8, background: 'var(--panel)', color: 'var(--slate)',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            <Icon name="upload" size={14} /> Import deals from folder
+          </button>}
           <button onClick={() => setAdding(true)} style={{
             display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px',
             border: 'none', borderRadius: 8, background: 'var(--accent)', color: '#fff',
@@ -1610,6 +1618,7 @@ function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM,
       <StashWidget deals={allDeals} onOpen={onOpen} onPatch={onPatch} />
 
       {adding && <AddDealModal onClose={() => setAdding(false)} onAdd={onAdd} />}
+      {bulk && window.BulkImportModal && <window.BulkImportModal onClose={() => setBulk(false)} onImportDeal={onImportDeal} onOpen={(id) => { setBulk(false); onOpen(id); }} />}
     </div>);
 
 }
@@ -2300,6 +2309,7 @@ async function runOMParse(file) {
   "market": "City, ST — city and two-letter state only, no street address or ZIP",
   "units": 0,
   "vintage": "year built (see rules) — a string; null if not stated",
+  "askPrice": "asking price or pricing guidance in dollars as a number (e.g. 12500000); null if the OM is unpriced or only says 'call for offers'",
   "brokerFirm": "full brokerage firm name from the cover page or 'Exclusively Listed By' section",
   "brokerOffice": "City, ST of the listing brokerage's office address printed on the OM (contact page, back cover or footer) — the broker's office, NOT the property's address; null if not shown",
   "brokerContacts": [{ "name": "", "title": "", "phone": "", "email": "", "office": "City, ST of this person's own office address if printed with their contact info, else null" }],
@@ -3011,10 +3021,10 @@ function AltusApp() {
     slots.forEach((slot, k) => { copy[slot] = reordered[k]; });
     return copy;
   });
-  const addDeal = (rawDeal) => {
+  const addDeal = (rawDeal, opts) => {
     const { _omContacts, _omFile, ...deal } = rawDeal || {};
     setDeals((ds) => [deal, ...ds]);
-    setOpenId(deal.id);
+    if (!(opts && opts.quiet)) setOpenId(deal.id);
     if (_omFile) stashDoc(deal.id, _omFile, 'OM');   // the OM used to fill the form goes to the Document Vault
     // Create CRM contacts from any broker contacts the OM auto-fill captured.
     const people = _omContacts && Array.isArray(_omContacts.people) ? _omContacts.people : [];
@@ -3289,7 +3299,7 @@ Do not include any text outside the JSON object.`;
   // ── Rent Roll upload ── parse current rent, market rent, physical vacancy and loss
   // to lease. Prefer the deterministic tabular parser; fall back to a model extraction
   // of the same aggregates. All annual figures are computed here in JS.
-  const handleRentRollUpload = async (dealId, file) => {
+  const handleRentRollUpload = async (dealId, file, opts) => {
     setRRMap((m) => ({ ...m, [dealId]: { status: 'parsing', fileName: file.name } }));
     stashDoc(dealId, file, 'Rent Roll');
     try {
@@ -3358,7 +3368,7 @@ ${excerpt}`;
         applied: !!(agg && Array.isArray(agg.units) && agg.units.length),
       };
       setRRMap((m) => ({ ...m, [dealId]: { status: 'done', fileName: file.name, parsed } }));
-      setOpenId(dealId);
+      if (!(opts && opts.quiet)) setOpenId(dealId);
     } catch (e) {
       setRRMap((m) => ({ ...m, [dealId]: { status: 'error', fileName: file.name, error: String(e) } }));
     }
@@ -3366,7 +3376,7 @@ ${excerpt}`;
 
   // ── T-12 upload ── pull delinquency (bad debt) and concessions, plus opex / EGI when
   // present, from the trailing-12 income statement.
-  const handleT12Upload = async (dealId, file) => {
+  const handleT12Upload = async (dealId, file, opts) => {
     setT12Map((m) => ({ ...m, [dealId]: { status: 'parsing', fileName: file.name } }));
     stashDoc(dealId, file, 'T-12');
     try {
@@ -3435,10 +3445,40 @@ ${fullText.slice(0, 60000)}`;
       }
       if (lines.length) { parsed.applied = true; parsed.lineCount = lines.length; }
       setT12Map((m) => ({ ...m, [dealId]: { status: 'done', fileName: file.name, parsed } }));
-      setOpenId(dealId);
+      if (!(opts && opts.quiet)) setOpenId(dealId);
     } catch (e) {
       setT12Map((m) => ({ ...m, [dealId]: { status: 'error', fileName: file.name, error: String(e) } }));
     }
+  };
+
+  // ── Folder import ── one deal per folder: create it from the OM, apply the rent roll and T-12,
+  // fill the stabilized expense lines from the Altus playbook, keep every file in the deal's
+  // Document Vault and park it in the Claude Underwrite stage for review.
+  const importDealFromFiles = async (group, onStep) => {
+    const step = (t) => { try { onStep && onStep(t); } catch (e) {} };
+    const id = 'imp-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    let parsed = {};
+    if (group.om) {
+      step('Reading OM');
+      try { parsed = (await runOMParse(group.om)).parsed || {}; } catch (e) { step('OM could not be read · continuing'); }
+    }
+    const n = (v) => (v == null || v === '' || isNaN(Number(v)) ? null : Number(v));
+    const price = n(parsed.askPrice);
+    const named = (Array.isArray(parsed.brokerContacts) ? parsed.brokerContacts : []).filter((c) => c && c.name).slice(0, 6);
+    addDeal({ id, name: ((group.nameEdited ? group.name : parsed.name || group.name) || 'Imported deal').trim(), type: 'Multifamily', bucket: 'Pipeline', stage: 'Claude UW',
+      market: parsed.market || '', broker: parsed.brokerFirm || '', analyst: null,
+      units: n(parsed.units), askPrice: price, purchasePrice: price, capex: null, vintage: parsed.vintage || null, offMarket: false,
+      trailingEGI: n(parsed.effectiveGrossIncome), currentOpexTotal: n(parsed.totalOpex), marketOpexPerUnit: 0, brokerEGI: n(parsed.brokerEGI), debt: null,
+      dateEntered: window.ALTUS_TODAY, dateLOISubmitted: null, loiAmount: null, dateUnderContract: null, dateLost: null,
+      notes: '', status: '', _rawStatus: '', importedBy: 'Claude', importedAt: new Date().toISOString(), importFolder: group.folder || group.name,
+      _omContacts: named.length ? { firm: parsed.brokerFirm || '', people: named, brokerOffice: parsed.brokerOffice || null, market: parsed.market || null } : undefined,
+      _omFile: group.om || undefined }, { quiet: true });
+    if (group.rr) { step('Reading rent roll'); await handleRentRollUpload(id, group.rr, { quiet: true }); }
+    if (group.t12) { step('Reading T-12'); await handleT12Upload(id, group.t12, { quiet: true }); }
+    (group.others || []).forEach((o) => stashDoc(id, o.file, o.category || 'Other'));
+    step('Filling expense playbook');
+    await new Promise((res) => setDeals((ds) => { res(); return ds.map((d) => (d.id === id ? lockUW(window.applyImportPlaybook ? window.applyImportPlaybook(d) : d) : d)); }));
+    return id;
   };
 
   const doSignIn = async (email, password) => {
@@ -3587,6 +3627,7 @@ ${fullText.slice(0, 60000)}`;
         omMap={omMap} t12Map={t12Map} rrMap={rrMap}
         sortKey={pipeSortKey} sortDir={pipeSortDir} onSortKeyChange={setPipeSortKey} onSortDirChange={setPipeSortDir}
         taskApi={{ todos, add: addTodo, patch: patchTodo }}
+        onImportDeal={importDealFromFiles}
         zebra={t.zebra} /> :
         view === 'loi' ? <LOIStatusView deals={loiDeals} onOpen={open} onPatch={patch} /> :
         view === 'metrics' ? <MetricsView deals={liveDeals} allDeals={deals} onOpen={open} /> :
