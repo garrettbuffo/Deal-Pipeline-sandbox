@@ -1847,9 +1847,8 @@ const NAV = [
 { key: 'pipeline', label: 'Pipeline', icon: 'board' },
 { key: 'loi', label: 'LOI Status', icon: 'flag' },
 { key: 'metrics', label: 'Metrics', icon: 'pulse' },
-{ key: 'brokercalls', label: 'Broker Calls', icon: 'note' },
+{ key: 'network', label: 'Network', icon: 'users' },
 { key: 'tasks', label: 'Tasks', icon: 'check' },
-{ key: 'crm', label: 'CRM', icon: 'deal' },
 { key: 'dead', label: 'Dead Deals', icon: 'close' },
 { key: 'assumptions', label: 'Assumptions', icon: 'calc' }];
 
@@ -3579,7 +3578,10 @@ ${fullText.slice(0, 60000)}`;
         zebra={t.zebra} /> :
         view === 'loi' ? <LOIStatusView deals={loiDeals} onOpen={open} onPatch={patch} /> :
         view === 'metrics' ? <MetricsView deals={liveDeals} allDeals={deals} onOpen={open} /> :
-        view === 'brokercalls' ? <BrokerCallsView deals={liveDeals} onOpen={open} /> :
+        view === 'network' || view === 'brokercalls' || view === 'crm' ? (window.NetworkView
+          ? <window.NetworkView contacts={contacts} deals={deals} onAddContact={addContact} onPatchContact={patchContact} onPatchDeal={patch}
+              onOpenDeal={(id) => { open(id); setView('pipeline'); }} />
+          : null) :
         view === 'assumptions' ? (window.AssumptionsView ? <window.AssumptionsView deals={deals} /> : null) :
         view === 'dead' ? <DeadDealsView deals={deadDeals} onOpen={open} onPatch={patch}
         onBulkPatch={bulkPatch} onBulkDelete={bulkDelete} onReorder={reorderVisible}
