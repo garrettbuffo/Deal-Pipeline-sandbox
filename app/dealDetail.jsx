@@ -688,6 +688,32 @@ function KpiStrip({ deal, m, propView, excluded }) {
 
 }
 
+/* Export to Excel — always available; writes the deal into the Altus UW template and downloads it. */
+function ExcelExportButton({ deal }) {
+  const [state, setState] = useStateD({ busy: false, msg: '', err: '' });
+  useEffectD(() => { if (!state.msg && !state.err) return; const t = setTimeout(() => setState({ busy: false, msg: '', err: '' }), state.err ? 8000 : 6000); return () => clearTimeout(t); }, [state.msg, state.err]);
+  const run = async () => {
+    setState({ busy: true, msg: '', err: '' });
+    try {
+      const r = await window.exportDealToExcel(deal);
+      setState({ busy: false, err: '', msg: 'Saved ' + r.filename + (r.raw.t12 || r.raw.rentRoll ? ' · raw tabs from ' + [r.raw.t12, r.raw.rentRoll].filter(Boolean).join(' and ') : '') });
+    } catch (e) {
+      setState({ busy: false, msg: '', err: (e && e.code === 'cancelled') || /cancel|declin/i.test(String(e && e.message)) ? '' : 'Export failed: ' + String((e && e.message) || e).slice(0, 140) });
+    }
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button type="button" onClick={run} disabled={state.busy}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 14px', border: 'none', borderRadius: 999,
+          background: '#107c41', color: '#fff', fontSize: 12.5, fontWeight: 600, cursor: state.busy ? 'wait' : 'pointer', fontFamily: 'var(--font)', opacity: state.busy ? 0.75 : 1 }}>
+        <Icon name="download" size={13} />{state.busy ? 'Building workbook…' : 'Export to Excel'}
+      </button>
+      {(state.msg || state.err) && <div role="status" style={{ position: 'absolute', right: 0, top: 40, zIndex: 20, width: 320, padding: '8px 11px', borderRadius: 8,
+        background: state.err ? 'var(--neg-soft)' : 'var(--pos-soft)', color: state.err ? 'var(--neg)' : 'var(--pos)', fontSize: 12, fontWeight: 600, boxShadow: 'var(--shadow-lg)' }}>
+        {state.err || state.msg}</div>}
+    </div>);
+}
+
 /* confirmation after an upload was applied straight to the deal */
 function AppliedBanner({ text, onOpen }) {
   const [hide, setHide] = useStateD(false);
@@ -1090,11 +1116,14 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
                 {deal.broker ? <><Sep /><span className="clip" style={{ maxWidth: 280 }}>{deal.broker}</span></> : null}
               </div>
             </div>
-            <div style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 7,
-              border: '1px solid var(--line)', borderRadius: 999, padding: '7px 15px', background: 'var(--panel-2)' }}>
-              <Icon name="clock" size={13} style={{ color: 'var(--muted)' }} />
-              <span className="num" style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>{days != null ? days : 0}</span>
-              <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>days in pipeline</span>
+            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10 }}>
+              {window.exportDealToExcel && <ExcelExportButton deal={deal} />}
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7,
+                border: '1px solid var(--line)', borderRadius: 999, padding: '7px 15px', background: 'var(--panel-2)' }}>
+                <Icon name="clock" size={13} style={{ color: 'var(--muted)' }} />
+                <span className="num" style={{ fontSize: 14, fontWeight: 700, color: 'var(--ink)' }}>{days != null ? days : 0}</span>
+                <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>days in pipeline</span>
+              </div>
             </div>
           </div>
 
@@ -1288,6 +1317,8 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
               </PanelCard>
 
               <BrokerCallLog deal={deal} contacts={contacts} onPatch={onPatch} />
+
+              {window.DocumentVault && <window.DocumentVault deal={deal} set={set} />}
 
             </div>
 

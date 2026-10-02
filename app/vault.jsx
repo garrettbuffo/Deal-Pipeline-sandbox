@@ -36,7 +36,21 @@ function localDB() {
     req.onerror = () => rej(req.error || new Error('IndexedDB unavailable'));
   });
 }
-async function localPut() { throw new Error('Local document storage is disabled — files must upload to Supabase.'); }
+// Live: every document goes to Supabase. The sandbox has no Supabase, so there (only) files are
+// kept in this browser so the vault can be tried end to end.
+const sandboxDocs = () => !!(window.ALTUS_CONFIG && window.ALTUS_CONFIG.SANDBOX);
+async function localPut(file) {
+  if (!sandboxDocs()) throw new Error('Local document storage is disabled — files must upload to Supabase.');
+  const db = await localDB();
+  const key = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  await new Promise((res, rej) => {
+    const tx = db.transaction(LOCAL_STORE, 'readwrite');
+    tx.objectStore(LOCAL_STORE).put(file, key);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+  const ext = (file.name.split('.').pop() || 'bin').toLowerCase();
+  return { path: 'local:' + key, local: true, name: file.name, ext, size: file.size, type: file.type || '', uploadedAt: new Date().toISOString() };
+}
 async function localGet(key) {
   const db = await localDB();
   return new Promise((res, rej) => {
@@ -186,11 +200,12 @@ function DocumentVault({ deal, set }) {
   const fileRef = useRefV(null);
   const cloud = window.AltusCloud;
   const cloudOn = !!(cloud && cloud.enabled && cloud.uploadDoc);
+  const store = (file) => (cloudOn ? cloud.uploadDoc(deal.id, file) : localPut(file));
 
   const addDocs = async (fileList, category) => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    if (!cloudOn) {
+    if (!cloudOn && !sandboxDocs()) {
       setUploads(files.map((f, i) => ({ key: 'err' + i + Date.now(), name: f.name, status: 'error',
         error: 'Supabase storage isn’t connected — documents only upload to the cloud. Sign in on the live dashboard and add it there.' })));
       return;
@@ -204,7 +219,7 @@ function DocumentVault({ deal, set }) {
       const key = file.name + '_' + Date.now() + Math.random();
       setUploads((u) => [...u, { key, name: file.name, status: 'uploading' }]);
       try {
-        const meta = await cloud.uploadDoc(deal.id, file);
+        const meta = await store(file);
         const entry = { id: 'doc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
           ...meta, category: category || guessCat(file.name) };
         current = [...current, entry];
@@ -233,7 +248,7 @@ function DocumentVault({ deal, set }) {
   const setCat = (doc, category) => set('documents', docs.map((d) => d.id === doc.id ? { ...d, category } : d));
 
   return (
-    <PanelCard title="Document Vault" hint={cloudOn ? 'OMs, T-12s, CoStar files & more — stored on Supabase' : 'Supabase storage not connected here — upload from the live dashboard'}>
+    <PanelCard title="Document Vault" hint={cloudOn ? 'OMs, T-12s, CoStar files & more — stored on Supabase' : sandboxDocs() ? 'Sandbox: files stay in this browser (live stores them on Supabase)' : 'Supabase storage not connected here — upload from the live dashboard'}>
       {/* drop zone */}
       <input ref={fileRef} type="file" multiple style={{ display: 'none' }} accept=".pdf,.xlsx,.xls,.xlsm,.csv,.png,.jpg,.jpeg,.doc,.docx"
         onChange={(e) => { addDocs(e.target.files, pendingCat); setPendingCat(null); e.target.value = ''; }} />
@@ -298,7 +313,7 @@ function DocumentVault({ deal, set }) {
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--faint)' }}>{fmtBytes(d.size)} · {fmtDate(d.uploadedAt ? d.uploadedAt.slice(0, 10) : '')}{isLocalDoc(d) ? ' · not in Supabase — re-add to sync' : ''}</div>
+                <div style={{ fontSize: 11, color: 'var(--faint)' }}>{fmtBytes(d.size)} · {fmtDate(d.uploadedAt ? d.uploadedAt.slice(0, 10) : '')}{isLocalDoc(d) ? (sandboxDocs() ? ' · sandbox copy (this browser)' : ' · not in Supabase — re-add to sync') : ''}</div>
               </div>
               <select value={d.category || 'Other'} onClick={(e) => e.stopPropagation()} onChange={(e) => setCat(d, e.target.value)}
             style={{ flex: 'none', fontSize: 11, fontWeight: 600, color: CAT_COLOR[d.category] || '#5b7088', background: (CAT_COLOR[d.category] || '#5b7088') + '14',
@@ -319,3 +334,5 @@ function DocumentVault({ deal, set }) {
 }
 
 window.DocumentVault = DocumentVault;
+window.vaultLocalPut = localPut;
+window.vaultLocalGet = (doc) => localGet(localKey(doc));

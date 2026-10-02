@@ -985,6 +985,7 @@ function AddDealModal({ onClose, onAdd }) {
   const [omMsg, setOmMsg] = useS('');
   const [omFields, setOmFields] = useS(null);  // financial fields pulled from the OM
   const [omContacts, setOmContacts] = useS(null);
+  const omFileRef = useR(null);
   const fileRef = useR(null);
   const [dragOver, setDragOver] = useS(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -996,6 +997,7 @@ function AddDealModal({ onClose, onAdd }) {
   const handleOM = async (file) => {
     if (!file) return;
     setOmState('parsing'); setOmMsg(file.name);
+    omFileRef.current = file;   // kept so the new deal's Document Vault gets the OM
     try {
       const { parsed } = await runOMParse(file);
       setF((s) => ({
@@ -1031,7 +1033,8 @@ function AddDealModal({ onClose, onAdd }) {
       dateEntered: window.ALTUS_TODAY, dateLOISubmitted: null, loiAmount: null,
       dateUnderContract: null, dateLost: null, notes: '', status: '', _rawStatus: '',
       ...(omFields || {}),
-      _omContacts: omContacts && omContacts.people.length ? omContacts : undefined });
+      _omContacts: omContacts && omContacts.people.length ? omContacts : undefined,
+      _omFile: omFileRef.current || undefined });
     onClose();
   };
   return (
@@ -3000,9 +3003,10 @@ function AltusApp() {
     return copy;
   });
   const addDeal = (rawDeal) => {
-    const { _omContacts, ...deal } = rawDeal || {};
+    const { _omContacts, _omFile, ...deal } = rawDeal || {};
     setDeals((ds) => [deal, ...ds]);
     setOpenId(deal.id);
+    if (_omFile) stashDoc(deal.id, _omFile, 'OM');   // the OM used to fill the form goes to the Document Vault
     // Create CRM contacts from any broker contacts the OM auto-fill captured.
     const people = _omContacts && Array.isArray(_omContacts.people) ? _omContacts.people : [];
     if (people.length) {
@@ -3201,9 +3205,11 @@ Do not include any text outside the JSON object.`;
   // Used by the OM/T-12/Rent Roll parse handlers so parsed files are kept automatically.
   const stashDoc = async (dealId, file, category) => {
     const cloud = window.AltusCloud;
-    if (!cloud || !cloud.enabled || !cloud.uploadDoc) return;
+    const cloudOn = !!(cloud && cloud.enabled && cloud.uploadDoc);
+    const sandbox = !!(window.ALTUS_CONFIG && window.ALTUS_CONFIG.SANDBOX && window.vaultLocalPut);
+    if (!cloudOn && !sandbox) return;
     try {
-      const meta = await cloud.uploadDoc(dealId, file);
+      const meta = cloudOn ? await cloud.uploadDoc(dealId, file) : await window.vaultLocalPut(file);
       const entry = { id: 'doc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ...meta, category };
       setDeals((ds) => ds.map((d) => d.id === dealId
         ? { ...d, documents: [...(Array.isArray(d.documents) ? d.documents : []), entry] }
