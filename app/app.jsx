@@ -2117,14 +2117,20 @@ function parseRentRollTabular(text){
   const isStart  = (c)=> /lease\s*(start|from|begin)|move[\s-]*in/.test(c);
   const isBeds   = (c)=> /^(beds?|bedrooms?|br|bd)$/.test(c);
   const isBaths  = (c)=> /^(baths?|bathrooms?|ba)$/.test(c);
+  // Prefer an occupancy status over e.g. a renovation status column.
+  const findStatus = (r) => { const o = r.findIndex((c) => /occup|lease status|unit status/.test(c)); return o >= 0 ? o : r.findIndex(isStatus); };
   let hi = -1, cols = null;
   for(let i=0;i<rows.length;i++){
-    const r = rows[i].map((c)=>c.trim().toLowerCase());
+    // Many exports stack the header over two rows ("Market" / "Rent"); test the row alone and merged with the row above.
+    const one = rows[i].map((c)=>c.trim().toLowerCase());
+    const two = i > 0 ? one.map((c, k) => (((rows[i-1][k]||'').trim().toLowerCase() + ' ' + c).trim())) : one;
+    const ok = (r) => r.findIndex(isUnit)>=0 && r.findIndex(isMarket)>=0 && r.findIndex(isRent)>=0;
+    const r = ok(one) ? one : ok(two) ? two : one;
     const unitIdx   = r.findIndex(isUnit);
     const marketIdx = r.findIndex(isMarket);
     const rentIdx   = r.findIndex(isRent);
     if(unitIdx>=0 && marketIdx>=0 && rentIdx>=0){
-      hi=i; cols={unitIdx,marketIdx,rentIdx,statusIdx:r.findIndex(isStatus),typeIdx:r.findIndex(isType),sfIdx:r.findIndex(isSF),
+      hi=i; cols={unitIdx,marketIdx,rentIdx,statusIdx:findStatus(r),typeIdx:r.findIndex(isType),sfIdx:r.findIndex(isSF),
         startIdx:r.findIndex(isStart),bedIdx:r.findIndex(isBeds),bathIdx:r.findIndex(isBaths)};
       break;
     }
@@ -3314,8 +3320,15 @@ ${excerpt}`;
         agg = safeParseJSON(out);
       }
       // Keep the standardized unit list on the deal for the Rent Roll Matrix tab.
+      // While a deal prices off its rent roll (the default), GPR, physical vacancy and loss to
+      // lease are re-derived from the new units and the deal's market rents.
       if (agg && Array.isArray(agg.units) && agg.units.length) {
-        patch(dealId, { rentRoll: { fileName: file.name, parsedAt: new Date().toISOString(), units: agg.units } });
+        const rentRoll = { fileName: file.name, parsedAt: new Date().toISOString(), units: agg.units };
+        setDeals((ds) => ds.map((d) => {
+          if (d.id !== dealId) return d;
+          const nd = { ...d, rentRoll };
+          return window.rentRollFields ? { ...nd, ...window.rentRollFields(nd) } : nd;
+        }));
       }
       if (!agg || !agg.totalUnits) throw new Error('No unit rows could be read from this rent roll.');
       const mAll = Number(agg.marketRentMonthlyAll) || 0;
@@ -3332,6 +3345,7 @@ ${excerpt}`;
         gprAnnual: Math.round(mAll * 12),
         physVacLoss: Math.round(avgOccCurrentRent * vacant * 12),
         lossToLease: Math.round((Number(agg.lossToLeaseMonthly) || 0) * 12),
+        applied: !!(agg && Array.isArray(agg.units) && agg.units.length),
       };
       setRRMap((m) => ({ ...m, [dealId]: { status: 'done', fileName: file.name, parsed } }));
       setOpenId(dealId);
@@ -3392,9 +3406,24 @@ ${fullText.slice(0, 60000)}`;
       const okCats = ['Rental Revenue', 'Loss to Lease', 'Physical Vacancy', 'Concessions', 'Bad Debt', 'RUBs', 'Other Income',
         'General & Admin', 'Maintenance & Repairs', 'Management', 'Payroll / Payroll Taxes', 'Marketing', 'Contract Services', 'Taxes', 'Insurance', 'Utilities', 'Other'];
       const lines = lp && Array.isArray(lp.lines) ? lp.lines
-        .filter((l) => l && l.name && !isNaN(Number(l.total)))
+        .filter((l) => l && l.name && !isNaN(Number(l.total)) && (okCats.includes(l.category) || !/exclu|total|subtotal|below noi|n\/a/i.test(String(l.category || ''))))
         .map((l) => ({ name: String(l.name).slice(0, 80), category: okCats.includes(l.category) ? l.category : 'Other', total: Math.round(Number(l.total)) })) : [];
-      if (lines.length) patch(dealId, { t12Lines: { fileName: file.name, parsedAt: new Date().toISOString(), period: (lp && lp.period) || '', lines } });
+      if (lines.length) {
+        // Pull the T-12 into the Full UW current column: RUBS and other income split, concessions
+        // and bad debt, and every expense line (which then sums to Current Operating Expenses).
+        const cat = {};
+        lines.forEach((l) => { cat[l.category] = (cat[l.category] || 0) + l.total; });
+        const t12Opex = {};
+        (window.OPEX_LINES || []).forEach((l) => { if (l.cat) t12Opex[l.key] = Math.round(cat[l.cat] || 0); });
+        const opexSum = Object.keys(t12Opex).reduce((a, k) => a + t12Opex[k], 0);
+        const rubs = Math.round(cat['RUBs'] || 0), oth = Math.round(cat['Other Income'] || 0);
+        patch(dealId, {
+          t12Lines: { fileName: file.name, parsedAt: new Date().toISOString(), period: (lp && lp.period) || '', lines },
+          t12Opex, currentOpexTotal: opexSum, curRubs: rubs, otherIncome: rubs + oth,
+          concessions: Math.round(Math.abs(cat['Concessions'] || 0) + Math.abs(cat['Bad Debt'] || 0)), badDebt: 0,
+        });
+      }
+      if (lines.length) { parsed.applied = true; parsed.lineCount = lines.length; }
       setT12Map((m) => ({ ...m, [dealId]: { status: 'done', fileName: file.name, parsed } }));
       setOpenId(dealId);
     } catch (e) {

@@ -688,6 +688,19 @@ function KpiStrip({ deal, m, propView, excluded }) {
 
 }
 
+/* confirmation after an upload was applied straight to the deal */
+function AppliedBanner({ text, onOpen }) {
+  const [hide, setHide] = useStateD(false);
+  if (hide) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderRadius: 9, background: 'var(--pos-soft)', color: 'var(--pos)', fontSize: 12.5, marginTop: 8 }}>
+      <Icon name="check" size={14} />
+      <span style={{ flex: 1, color: 'var(--ink)' }}>{text}</span>
+      <button type="button" onClick={onOpen} style={{ border: 'none', background: 'none', color: 'var(--accent)', fontWeight: 600, cursor: 'pointer', fontSize: 12.5, fontFamily: 'var(--font)' }}>Review</button>
+      <button type="button" aria-label="Dismiss" onClick={() => setHide(true)} style={{ border: 'none', background: 'none', color: 'var(--muted)', cursor: 'pointer', padding: 2 }}><Icon name="close" size={12} /></button>
+    </div>);
+}
+
 /* tab bar */
 function DetailTabs({ tab, setTab, showProperties }) {
   const tabs = [
@@ -1128,12 +1141,16 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
             }
           }} />
           }
-            {t12Data?.status === 'done' && t12Data.parsed && T12Banner &&
+            {t12Data?.status === 'done' && t12Data.parsed && t12Data.parsed.applied &&
+          <AppliedBanner text={'T-12 applied to Full UW: ' + t12Data.parsed.lineCount + ' line items, RUBS and other income, concessions and operating expenses.'} onOpen={() => setTab('fulluw')} />}
+            {t12Data?.status === 'done' && t12Data.parsed && !t12Data.parsed.applied && T12Banner &&
           <T12Banner parsed={t12Data.parsed}
           onReupload={onClearT12 ? () => onClearT12(deal.id) : null}
           onAccept={(fields) => onAcceptOM && onAcceptOM(deal.id, fields)} />
           }
-            {rrData?.status === 'done' && rrData.parsed && RRBanner &&
+            {rrData?.status === 'done' && rrData.parsed && rrData.parsed.applied &&
+          <AppliedBanner text={'Rent roll applied: ' + rrData.parsed.totalUnits + ' units. GPR, physical vacancy and loss to lease now price off it.'} onOpen={() => setTab('rentroll')} />}
+            {rrData?.status === 'done' && rrData.parsed && !rrData.parsed.applied && RRBanner &&
           <RRBanner parsed={rrData.parsed}
           onReupload={onClearRR ? () => onClearRR(deal.id) : null}
           onAccept={(fields) => onAcceptOM && onAcceptOM(deal.id, fields)} />

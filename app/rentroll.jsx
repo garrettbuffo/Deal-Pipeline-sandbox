@@ -57,28 +57,50 @@ function rentRollMatrix(units) {
   return { rows, total };
 }
 
-// Rent premise for GPR: each type's units × the chosen benchmark (falls back to that type's market).
-const BASES = [
-  { key: 'avgMk', label: 'Market (rent roll)' },
-  { key: 'top25', label: 'Top 25% in-place' },
-  { key: 'max', label: 'Max in-place' },
-  { key: 'last3', label: 'Last 3 signed' },
-];
-function rentRollUW(units, basisKey) {
-  const { rows } = rentRollMatrix(units);
-  const bench = {};
-  rows.forEach((r) => { bench[r.type] = r[basisKey] != null ? r[basisKey] : r.avgMk; });
-  let gprM = 0, ltlM = 0, inH = 0, occ = 0, vac = 0;
-  units.forEach((u) => {
-    const b = bench[u.type || 'All units'] != null ? bench[u.type || 'All units'] : (u.market || 0);
-    gprM += b;
-    if (u.occ) { occ++; if (u.rent != null) { inH += u.rent; ltlM += Math.max(0, b - u.rent); } } else vac++;
+// Underwritten market rent by unit type, as the template's Property Info "Market Rents" block:
+// the rent roll's market rent for the type, unless it sits below the type's average in-place
+// lease, in which case in-place is the floor. Any type can be overridden (deal.marketRents).
+function rentRollPricing(deal) {
+  const units = deal && deal.rentRoll && Array.isArray(deal.rentRoll.units) ? deal.rentRoll.units : [];
+  if (!units.length) return null;
+  const ov = deal.marketRents || {};
+  const types = rentRollMatrix(units).rows.map((r) => {
+    const rrMkt = r.avgMk != null && r.avgMk > 0 ? r.avgMk : null;
+    const inPlace = r.avgIn;
+    const useRR = rrMkt != null && (inPlace == null || rrMkt >= inPlace);
+    const dflt = useRR ? rrMkt : (inPlace != null ? inPlace : 0);
+    const o = Number(ov[r.type]);
+    return { type: r.type, units: r.units, occUnits: r.occUnits, vac: r.units - r.occUnits, sf: r.avgSf, inPlace, rrMkt, dflt,
+      dfltSrc: useRR ? 'rent roll market' : rrMkt == null ? 'no market on roll · avg in-place' : 'market below in-place · avg in-place',
+      market: o > 0 ? o : dflt, overridden: o > 0 };
   });
-  const avgOcc = occ ? inH / occ : 0;
-  return { units: units.length, gprAnnual: Math.round(gprM * 12), lossToLease: Math.round(ltlM * 12), physVacLoss: Math.round(avgOcc * vac * 12), vacant: vac };
+  const N = types.reduce((s, t) => s + t.units, 0);
+  const sum = (f) => types.reduce((s, t) => s + f(t), 0);
+  const gprM = sum((t) => t.units * t.market);
+  // physical vacancy: vacant units at the type's effective (avg in-place) lease rate
+  const physM = sum((t) => t.vac * (t.inPlace != null ? t.inPlace : t.market));
+  // loss to lease: market vs avg in-place across every unit (template R10 x units), so
+  // GPR − physical vacancy − loss to lease = the rent roll's in-place rent
+  const ltlM = sum((t) => t.units * (t.market - (t.inPlace != null ? t.inPlace : t.market)));
+  const avgIn = N ? sum((t) => t.units * (t.inPlace != null ? t.inPlace : 0)) / N : 0;
+  const avgMkt = N ? gprM / N : 0;
+  const sfN = sum((t) => (t.sf ? t.units : 0));
+  return { types, units: N, occ: N ? sum((t) => t.occUnits) / N : 0, avgSf: sfN ? sum((t) => (t.sf ? t.sf * t.units : 0)) / sfN : null,
+    avgIn, avgMkt, ltlPerUnit: avgMkt - avgIn, ltlPct: avgMkt ? 1 - avgIn / avgMkt : null,
+    inPlaceAnnual: Math.round(avgIn * N * 12), gprAnnual: Math.round(gprM * 12), physVacLoss: Math.round(physM * 12), lossToLease: Math.round(ltlM * 12) };
+}
+// The Full UW income fields the rent roll drives while the deal is linked to it.
+function rentRollFields(deal) {
+  const p = rentRollPricing(deal);
+  if (!p || (deal && deal.incomeFromRR === false)) return {};
+  return { units: p.units, gprAnnual: p.gprAnnual, physVacLoss: p.physVacLoss, lossToLease: p.lossToLease };
+}
+// Apply a change and, if the deal is linked to its rent roll, re-derive the income fields with it.
+function setWithRentRoll(deal, set, changes) {
+  set({ ...changes, ...rentRollFields({ ...deal, ...changes }) });
 }
 
-// Sandbox preview only: a plausible roll sized to the deal so the matrix can be reviewed visually.
+// Sandbox preview only: a plausible roll sized to the deal so the layout can be reviewed visually.
 function sampleUnits(deal) {
   const n = Math.max(8, Math.min(400, Number(deal.units) || 120));
   const rpu = Number(deal.gprAnnual) > 0 && Number(deal.units) > 0 ? deal.gprAnnual / deal.units / 12 : 1050;
@@ -109,17 +131,29 @@ function RRConfirm({ label, confirmLabel, onConfirm, style }) {
     onClick={() => { if (armed) { setArmed(false); onConfirm(); } else setArmed(true); }}>{armed ? confirmLabel : label}</button>;
 }
 
+
+function RRText({ value, onCommit, width, placeholder, type }) {
+  const [v, setV] = useStateR(value || '');
+  useEffectR(() => { setV(value || ''); }, [value]);
+  return <input type={type || 'text'} value={v} placeholder={placeholder} onChange={(e) => setV(e.target.value)}
+    onBlur={() => { if ((v || '') !== (value || '')) onCommit(v); }} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+    style={{ width: width || '100%', height: 28, border: '1px solid var(--line-2)', borderRadius: 6, padding: '0 7px', fontSize: 12.5, background: 'var(--panel)', boxSizing: 'border-box', fontFamily: 'var(--font)' }} />;
+}
+function RRNum({ value, onCommit, width }) {
+  return <RRText value={value == null ? '' : String(value)} width={width || 84} onCommit={(t) => { const n = Number(String(t).replace(/[$,\s]/g, '')); onCommit(t === '' || isNaN(n) ? null : Math.round(n)); }} />;
+}
+
 function RentRollTab({ deal, set, onRRUpload, rrData }) {
   const rr = deal.rentRoll;
   const units = (rr && Array.isArray(rr.units)) ? rr.units : [];
   const fileRef = useRefR(null);
-  const [basis, setBasis] = useStateR('avgMk');
   const [showUnits, setShowUnits] = useStateR(false);
-  const [applied, setApplied] = useStateR(false);
   const mx = useMemoR(() => rentRollMatrix(units), [units]);
   const parsing = rrData && rrData.status === 'parsing';
   const err = rrData && rrData.status === 'error' ? String(rrData.error || '') : '';
   const sandbox = !!(window.ALTUS_CONFIG && window.ALTUS_CONFIG.SANDBOX);
+  const setUnits = (next) => setWithRentRoll(deal, set, { rentRoll: { ...rr, units: next, editedAt: new Date().toISOString() } });
+  const editUnit = (i, k, v) => setUnits(units.map((u, j) => (j === i ? { ...u, [k]: v } : u)));
 
   const upload = onRRUpload && <>
     <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.txt" style={{ display: 'none' }}
@@ -134,13 +168,13 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
         <SectionHead icon="table" title="Rent Roll Matrix" desc="Unit mix by type, built the way the Altus Excel template's Unit Mix Summary is." />
         <div style={{ marginTop: 18, padding: '34px 20px', border: '1px dashed var(--line-2)', borderRadius: 10, textAlign: 'center', background: 'var(--panel-2)' }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>{parsing ? 'Reading the rent roll…' : 'No rent roll on this deal yet'}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '6px auto 16px', maxWidth: 520, lineHeight: 1.5 }}>
-            Upload the seller's rent roll (Excel, CSV or PDF). Clean tables are read directly; anything else is read by Claude. The matrix groups units by type with occupancy, in-place vs market, Max, Top 25% and the last three signed leases.
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '6px auto 16px', maxWidth: 540, lineHeight: 1.5 }}>
+            Upload the seller's rent roll (Excel, CSV or PDF). Clean tables are read directly; anything else is read by Claude. Every unit stays editable here, and the Full UW income section prices off it.
           </div>
           {err && <div style={{ fontSize: 12, color: 'var(--neg)', marginBottom: 12 }}>Could not read that file: {err.slice(0, 160)}</div>}
           <div style={{ display: 'inline-flex', gap: 8 }}>
             {upload}
-            {sandbox && <button type="button" style={R_BTN} onClick={() => set('rentRoll', { fileName: 'Sample units (sandbox preview)', sample: true, parsedAt: new Date().toISOString(), units: sampleUnits(deal) })}>Preview with sample units</button>}
+            {sandbox && <button type="button" style={R_BTN} onClick={() => setWithRentRoll(deal, set, { rentRoll: { fileName: 'Sample units (sandbox preview)', sample: true, parsedAt: new Date().toISOString(), units: sampleUnits(deal) } })}>Preview with sample units</button>}
           </div>
         </div>
       </Card>);
@@ -149,11 +183,8 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
   const T = mx.total;
   const physVac = T.units ? 1 - T.occUnits / T.units : null;
   const ltl = (b) => (b && T.avgIn != null ? 1 - T.avgIn / b : null);
-  const uwFig = rentRollUW(units, basis);
-  const apply = () => {
-    set({ units: uwFig.units, gprAnnual: uwFig.gprAnnual, physVacLoss: uwFig.physVacLoss, lossToLease: uwFig.lossToLease });
-    setApplied(true); setTimeout(() => setApplied(false), 2500);
-  };
+  const pr = rentRollPricing(deal);
+  const linked = deal.incomeFromRR !== false;
   const cols = 'minmax(110px,1.2fr) 60px 64px 72px 66px 92px 70px 92px 70px 84px 84px 90px 108px';
   const cellR = { padding: '8px 8px', fontSize: 12.5, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
   const rowView = (r, isTotal) => (
@@ -174,40 +205,40 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
       <div style={{ ...cellR, background: 'var(--panel-3)' }}>{rMoney(r.last3)}</div>
     </div>);
 
-  const occList = units.filter((u) => u.occ && u.rent > 0);
   const stat = (label, value, sub, color) => (
     <div style={{ flex: '1 1 140px', padding: '10px 14px', borderRadius: 9, background: 'var(--panel-2)', border: '1px solid var(--line)' }}>
       <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>{label}</div>
       <div className="num" style={{ fontSize: 18, fontWeight: 700, color: color || 'var(--ink)', marginTop: 3 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: 'var(--faint)', marginTop: 2 }}>{sub}</div>}
     </div>);
+  const th = (h, i, left) => <th key={h} style={{ ...R_HEAD, textAlign: left ? 'left' : 'right', position: 'sticky', top: 0, background: 'var(--panel)', zIndex: 1 }}>{h}</th>;
+  const td = { padding: '3px 6px', borderTop: '1px solid var(--line)' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Card>
         <SectionHead icon="table" title="Rent Roll Matrix"
           desc={<span>{rr.sample ? <b style={{ color: 'var(--warn)' }}>Sample units for layout review, not from a rent roll · </b> : null}
-            {rr.fileName || 'Rent roll'} · {units.length} units{rr.parsedAt ? ' · read ' + new Date(rr.parsedAt).toLocaleDateString() : ''}</span>}
+            {rr.fileName || 'Rent roll'} · {units.length} units{rr.parsedAt ? ' · read ' + new Date(rr.parsedAt).toLocaleDateString() : ''}{rr.editedAt ? ' · edited ' + new Date(rr.editedAt).toLocaleDateString() : ''}</span>}
           right={<div style={{ display: 'flex', gap: 8 }}>{upload}
             <RRConfirm label="Remove" confirmLabel="Remove rent roll? Click again" onConfirm={() => set('rentRoll', null)} style={R_BTN} /></div>} />
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
           {stat('Physical Occupancy', rPct(T.units ? T.occUnits / T.units : null), T.occUnits + ' of ' + T.units + ' units')}
           {stat('Avg In-Place', rMoney(T.avgIn), rMoney2(T.psf) + ' / SF')}
-          {stat('Avg Market', rMoney(T.avgMk), rMoney2(T.mpsf) + ' / SF', 'var(--accent-2)')}
+          {stat('Avg Market (roll)', rMoney(T.avgMk), rMoney2(T.mpsf) + ' / SF', 'var(--accent-2)')}
           {stat('Top 25% In-Place', rMoney(T.top25), T.avgIn ? '+' + rPct(T.top25 / T.avgIn - 1) + ' over avg in-place' : null)}
-          {stat('Loss to Lease', rPct(ltl(T.avgMk)), 'in-place vs market')}
+          {stat('UW Market', rMoney(pr && pr.avgMkt), pr && pr.ltlPct != null ? rPct(pr.ltlPct) + ' loss to lease' : null, 'var(--pos)')}
         </div>
 
         <div style={{ overflowX: 'auto', marginTop: 16 }}>
           <div style={{ minWidth: 1080 }}>
             <div style={{ display: 'grid', gridTemplateColumns: cols }}>
               {['Unit Type', 'Units', '% Total', 'Avg SF', 'Occ %', 'Avg In-Place', '$/SF', 'Market', 'Mkt $/SF', 'Min', 'Max', 'Top 25%', 'Last 3 Signed'].map((h, i) =>
-                <div key={h} style={{ ...R_HEAD, textAlign: i ? 'right' : 'left', ...(i >= 9 ? { background: 'var(--panel-3)', borderRadius: i === 9 ? '6px 0 0 0' : i === 12 ? '0 6px 0 0' : 0, paddingTop: 6 } : { paddingTop: 6 }) }}>{h}</div>)}
+                <div key={h} style={{ ...R_HEAD, textAlign: i ? 'right' : 'left', paddingTop: 6, ...(i >= 9 ? { background: 'var(--panel-3)', borderRadius: i === 9 ? '6px 0 0 0' : i === 12 ? '0 6px 0 0' : 0 } : {}) }}>{h}</div>)}
             </div>
             {mx.rows.map((r) => rowView(r, false))}
             {rowView(T, true)}
-            {/* vacancy / loss-to-lease tracker (template row 28) */}
             <div style={{ display: 'grid', gridTemplateColumns: cols, borderTop: '1px solid var(--line)' }}>
               <div style={{ ...cellR, textAlign: 'left', color: 'var(--muted)', fontSize: 11.5 }}>Vacancy / loss to lease</div>
               <div style={cellR} /><div style={cellR} /><div style={cellR} />
@@ -222,55 +253,47 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
             </div>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--faint)', marginTop: 8, lineHeight: 1.5 }}>
-          Min, Max, Top 25% and Last 3 Signed use occupied in-place leases. Top 25% averages the leases at or above the 75th percentile for each type. Totals are weighted by unit count.
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 12, padding: '9px 12px', borderRadius: 8, background: linked ? 'var(--accent-soft)' : 'var(--panel-2)', fontSize: 12, color: 'var(--slate)' }}>
+          <Icon name={linked ? 'check' : 'lock'} size={13} style={{ color: linked ? 'var(--accent-2)' : 'var(--muted)' }} />
+          {linked
+            ? <span>Feeds Full UW: GPR <b className="num">{rMoney(pr.gprAnnual)}</b> · physical vacancy <b className="num">{rMoney(pr.physVacLoss)}</b> · loss to lease <b className="num">{rMoney(pr.lossToLease)}</b>. Set market rents by unit type in Full UW.</span>
+            : <span>Full UW income is entered by hand, not from this rent roll.</span>}
+          <button type="button" style={{ ...R_BTN, marginLeft: 'auto', padding: '4px 10px' }}
+            onClick={() => (linked ? set('incomeFromRR', false) : set({ incomeFromRR: true, ...rentRollFields({ ...deal, incomeFromRR: true }) }))}>
+            {linked ? 'Unlink' : 'Link to Full UW'}</button>
         </div>
       </Card>
 
       <Card>
-        <SectionHead icon="calc" title="Use in Full UW" desc="Push gross potential rent, physical vacancy and loss to lease into the Full UW income section." />
-        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 14 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>Market rent basis</span>
-            <select value={basis} onChange={(e) => setBasis(e.target.value)}
-              style={{ height: 34, border: '1px solid var(--line-2)', borderRadius: 7, padding: '0 10px', background: 'var(--panel)', fontSize: 13, fontFamily: 'var(--font)' }}>
-              {BASES.map((b) => <option key={b.key} value={b.key}>{b.label}</option>)}
-            </select>
-          </label>
-          {[['Units', uwFig.units.toLocaleString()], ['Gross Potential Rent', rMoney(uwFig.gprAnnual)], ['Physical Vacancy', rMoney(uwFig.physVacLoss)], ['Loss to Lease', rMoney(uwFig.lossToLease)]].map(([l, v]) =>
-            <div key={l} style={{ minWidth: 120 }}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>{l}</div>
-              <div className="num" style={{ fontSize: 16, fontWeight: 700, color: 'var(--ink)', marginTop: 4 }}>{v}</div>
-              {l !== 'Units' && <div style={{ fontSize: 10.5, color: 'var(--faint)' }}>annual</div>}
-            </div>)}
-          <button type="button" style={{ ...R_PRIMARY, marginLeft: 'auto', height: 34 }} onClick={apply}>{applied ? 'Applied ✓' : 'Apply to Full UW'}</button>
-        </div>
-        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 10 }}>
-          Currently in Full UW: GPR {rMoney(deal.gprAnnual)} · physical vacancy {rMoney(deal.physVacLoss)} · loss to lease {rMoney(deal.lossToLease)}
-        </div>
-      </Card>
-
-      <Card>
-        <SectionHead icon="doc" title="Units" desc={occList.length + ' occupied with in-place rent · ' + (units.length - units.filter((u) => u.occ).length) + ' vacant'}
-          right={<button type="button" style={R_BTN} onClick={() => setShowUnits(!showUnits)} aria-expanded={showUnits}>{showUnits ? 'Hide units' : 'Show units'}</button>} />
-        {showUnits && <div style={{ overflowX: 'auto', marginTop: 12, maxHeight: 460, overflowY: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 620 }}>
-            <thead><tr>{['Unit', 'Type', 'SF', 'Market', 'In-Place', 'Status', 'Lease Start'].map((h, i) =>
-              <th key={h} style={{ ...R_HEAD, textAlign: i < 2 || i === 5 ? 'left' : 'right', position: 'sticky', top: 0, background: 'var(--panel)' }}>{h}</th>)}</tr></thead>
-            <tbody>{units.map((u, i) => (
-              <tr key={u.id + '-' + i} style={{ borderTop: '1px solid var(--line)' }}>
-                <td style={{ padding: '6px 8px' }}>{u.id}</td>
-                <td style={{ padding: '6px 8px' }}>{u.type}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }} className="num">{u.sf || '—'}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }} className="num">{rMoney(u.market)}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }} className="num">{u.occ ? rMoney(u.rent) : '—'}</td>
-                <td style={{ padding: '6px 8px', color: u.occ ? 'var(--slate)' : 'var(--neg)' }}>{u.occ ? 'Occupied' : 'Vacant'}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }} className="num">{u.leaseStart || '—'}</td>
-              </tr>))}</tbody>
-          </table>
-        </div>}
+        <SectionHead icon="edit" title="Units" desc={'Edit any unit the parser got wrong; the matrix and Full UW update as you go. ' + (units.length - units.filter((u) => u.occ).length) + ' vacant.'}
+          right={<button type="button" style={R_BTN} onClick={() => setShowUnits(!showUnits)} aria-expanded={showUnits}>{showUnits ? 'Hide units' : 'Show and edit units'}</button>} />
+        {showUnits && <>
+          <div style={{ overflowX: 'auto', marginTop: 12, maxHeight: 520, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, minWidth: 760 }}>
+              <thead><tr>{th('Unit', 0, true)}{th('Type', 1, true)}{th('SF', 2)}{th('Market', 3)}{th('In-Place', 4)}{th('Occupied', 5)}{th('Lease Start', 6)}{th('', 7)}</tr></thead>
+              <tbody>{units.map((u, i) => (
+                <tr key={i}>
+                  <td style={td}><RRText value={u.id} width={70} onCommit={(v) => editUnit(i, 'id', v)} /></td>
+                  <td style={td}><RRText value={u.type} width={120} onCommit={(v) => editUnit(i, 'type', v.trim() || 'All units')} /></td>
+                  <td style={{ ...td, textAlign: 'right' }}><RRNum value={u.sf} width={70} onCommit={(v) => editUnit(i, 'sf', v)} /></td>
+                  <td style={{ ...td, textAlign: 'right' }}><RRNum value={u.market} onCommit={(v) => editUnit(i, 'market', v)} /></td>
+                  <td style={{ ...td, textAlign: 'right' }}><RRNum value={u.rent} onCommit={(v) => editUnit(i, 'rent', v)} /></td>
+                  <td style={{ ...td, textAlign: 'right' }}>
+                    <select value={u.occ ? '1' : '0'} onChange={(e) => editUnit(i, 'occ', e.target.value === '1')}
+                      style={{ height: 28, border: '1px solid var(--line-2)', borderRadius: 6, fontSize: 12.5, background: 'var(--panel)', color: u.occ ? 'var(--ink)' : 'var(--neg)', fontFamily: 'var(--font)' }}>
+                      <option value="1">Occupied</option><option value="0">Vacant</option></select></td>
+                  <td style={{ ...td, textAlign: 'right' }}><RRText type="date" value={u.leaseStart} width={132} onCommit={(v) => editUnit(i, 'leaseStart', v)} /></td>
+                  <td style={{ ...td, textAlign: 'right' }}>
+                    <button type="button" title="Remove unit" aria-label={'Remove unit ' + u.id} onClick={() => setUnits(units.filter((_, j) => j !== i))}
+                      style={{ border: 'none', background: 'none', color: 'var(--faint)', cursor: 'pointer', padding: 4 }}><Icon name="close" size={12} /></button></td>
+                </tr>))}</tbody>
+            </table>
+          </div>
+          <button type="button" style={{ ...R_BTN, marginTop: 10 }} onClick={() => { const last = units[units.length - 1] || {}; setUnits([...units, { id: 'New', type: last.type || 'All units', sf: last.sf || null, market: last.market || null, rent: null, occ: false, leaseStart: '' }]); }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="plus" size={12} />Add unit</span></button>
+        </>}
       </Card>
     </div>);
 }
 
-Object.assign(window, { RentRollTab, rentRollMatrix, rentRollUW, percentileInc });
+Object.assign(window, { RentRollTab, rentRollMatrix, rentRollPricing, rentRollFields, setWithRentRoll, percentileInc });

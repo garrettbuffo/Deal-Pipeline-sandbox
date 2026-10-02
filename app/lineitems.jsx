@@ -1,8 +1,9 @@
-// app/lineitems.jsx — Full UW "Operating Expense & Other Income Detail" panel.
-// Puts the T-12 by line item next to our underwriting, the way the Altus Excel template's
-// Property Info & Assumptions sheet does: each OpEx line as an annual total and $/unit,
-// management as % of EGI, and other income split into RUBS vs other income. The
-// "Altus playbook" button ports the multifamily-uw skill's opex_model.py rules.
+// app/lineitems.jsx — the expense breakout under Full UW's Income & Economic Vacancy box.
+// Laid out like the Altus Excel template's Property Info & Assumptions "Expenses" block:
+// each line's T-12 total and per unit next to our stabilized total and per unit, management
+// as % of EGI, then total expenses, expense ratio, NOI, cap rate and yield on cost. The T-12
+// side links to Current Operating Expenses and the stabilized side to OpEx / Unit. "Altus
+// playbook" ports the multifamily-uw skill's opex_model.py rules.
 const { useState: useStateL, useEffect: useEffectL } = React;
 
 const OPEX_LINES = [
@@ -12,20 +13,14 @@ const OPEX_LINES = [
   { key: 'payroll',    label: 'Payroll / Payroll Taxes', cat: 'Payroll / Payroll Taxes' },
   { key: 'marketing',  label: 'Marketing',               cat: 'Marketing' },
   { key: 'contract',   label: 'Contract Services',       cat: 'Contract Services' },
-  { key: 'taxes',      label: 'Real Estate Taxes',       cat: 'Taxes' },
+  { key: 'taxes',      label: 'Taxes',                   cat: 'Taxes' },
   { key: 'insurance',  label: 'Insurance',               cat: 'Insurance' },
   { key: 'utilities',  label: 'Utilities',               cat: 'Utilities' },
   { key: 'other',      label: 'Other',                   cat: 'Other' },
-  { key: 'reserves',   label: 'Replacement Reserves',    cat: null },
+  { key: 'reserves',   label: 'Reserves & Replacements', cat: null },
 ];
 const REVENUE_CATS = ['Rental Revenue', 'Loss to Lease', 'Physical Vacancy', 'Concessions', 'Bad Debt', 'RUBs', 'Other Income'];
 const EXPENSE_CATS = OPEX_LINES.filter((l) => l.cat).map((l) => l.cat);
-// Seeded effective multifamily tax rates on purchase price (multifamily-uw county_tax_rates.py).
-const COUNTY_TAX = [
-  ['TX', 'Dallas', 2.4], ['TX', 'Tarrant', 2.4], ['TX', 'Bexar', 2.5], ['TX', 'Travis', 2.0], ['TX', 'Lubbock', 2.1],
-  ['TX', 'Ector', 2.4], ['OK', 'Oklahoma', 1.2], ['OK', 'Tulsa', 1.25], ['SC', 'Greenville', 1.9], ['SC', 'Spartanburg', 1.9],
-];
-
 const lMoney = (v) => (v == null || isNaN(v)) ? '—' : (v < 0 ? '−' : '') + '$' + Math.round(Math.abs(v)).toLocaleString('en-US');
 const lPct = (v, d = 1) => (v == null || isNaN(v)) ? '—' : (v * 100).toFixed(d) + '%';
 const lNum = (v) => (v == null || v === '' || isNaN(Number(v)) ? 0 : Number(v));
@@ -107,9 +102,7 @@ function useOpenState(key, dflt) {
 }
 
 const L_HEAD = { fontSize: 9.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' };
-const L_BTN = { border: '1px solid var(--line-2)', background: 'var(--panel)', color: 'var(--slate)', borderRadius: 7, padding: '6px 11px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' };
-const L_PRIMARY = { ...L_BTN, border: 'none', background: 'var(--accent)', color: '#fff' };
-const L_SELECT = { border: '1px solid var(--line-2)', borderRadius: 7, padding: '5px 8px', background: 'var(--panel)', fontSize: 12, color: 'var(--ink)', fontFamily: 'var(--font)', cursor: 'pointer', height: 30 };
+const L_BTN = { border: '1px solid var(--line-2)', background: 'var(--panel)', color: 'var(--slate)', borderRadius: 7, padding: '5px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' };
 
 /* two-click confirm button (the artifact viewer has no confirm dialog) */
 function ConfirmBtn({ label, confirmLabel, onConfirm, style }) {
@@ -119,200 +112,131 @@ function ConfirmBtn({ label, confirmLabel, onConfirm, style }) {
     onClick={() => { if (armed) { setArmed(false); onConfirm(); } else setArmed(true); }}>{armed ? confirmLabel : label}</button>;
 }
 
-function LineItemsSection({ deal, set, uw, onT12Upload, t12Data }) {
-  const [open, setOpen] = useOpenState('altus_lineitems_open', true);
+// T-12 expense by line as stored on the deal (deal.t12Opex), else null when none entered.
+function t12OpexLines(deal) {
+  const t = deal.t12Opex;
+  if (!t || !OPEX_LINES.some((l) => lNum(t[l.key]))) return null;
+  return t;
+}
+// Stabilized OpEx for a given EGI: fixed lines + management % of EGI, or the single $/unit.
+function stabOpexFor(deal, egi) {
+  const ux = deal.uwOpex && deal.uwOpex.mode === 'lines' ? deal.uwOpex : null;
+  if (!ux) return lNum(deal.marketOpexPerUnit) * (deal.units || 1);
+  return OPEX_LINES.filter((l) => !l.pct).reduce((s, l) => s + lNum((ux.lines || {})[l.key]), 0) + lNum(ux.mgmtPct) / 100 * egi;
+}
+
+function ExpenseBreakout({ deal, set, inPlaceEGI, stabEGI, onT12Upload, t12Data }) {
   const units = deal.units || 1;
-  const cat = t12ByCategory(deal);
   const ux = deal.uwOpex || {};
   const active = ux.mode === 'lines';
-  const uo = deal.uwOtherIncome || {};
-  const activeO = uo.mode === 'lines';
-  const egi1 = uw && uw.rows && uw.rows[1] ? uw.rows[1].egi : 0;
-  const t12Egi = cat ? REVENUE_CATS.reduce((s, c) => s + (cat[c] || 0), 0) : (uw && uw.rows[0] ? uw.rows[0].egi : 0);
-  const pb = ux.playbook || { tier: 'secondary', taxMethod: 'prelim', taxRate: '' };
+  const t12 = t12OpexLines(deal);
+  const t12v = deal.t12Opex || {};
+  const src = deal.t12Lines && Array.isArray(deal.t12Lines.lines) ? deal.t12Lines.lines : [];
+  const price = lNum(deal.purchasePrice), basis = price + lNum(deal.capex);
 
-  const t12Total = (l) => (cat && l.cat ? (cat[l.cat] || 0) : null);
-  const t12pu = cat ? OPEX_LINES.reduce((o, l) => { if (l.cat) o[l.key] = (cat[l.cat] || 0) / units; return o; }, {}) : null;
-  const uwTotal = (l) => (l.pct ? lNum(ux.mgmtPct) / 100 * egi1 : lNum((ux.lines || {})[l.key]));
-  const fixedTotal = OPEX_LINES.filter((l) => !l.pct).reduce((s, l) => s + lNum((ux.lines || {})[l.key]), 0);
-  const uwOpexY1 = fixedTotal + lNum(ux.mgmtPct) / 100 * egi1;
-  const t12OpexTotal = cat ? EXPENSE_CATS.reduce((s, c) => s + (cat[c] || 0), 0) : lNum(deal.currentOpexTotal);
-
-  // Keep the single OpEx/unit field in step (Quick UW caps and other views read it).
+  const t12Total = t12 ? OPEX_LINES.reduce((s, l) => s + lNum(t12v[l.key]), 0) : lNum(deal.currentOpexTotal);
+  const stabTotal = stabOpexFor(deal, stabEGI);
+  const setT12 = (key, v) => {
+    const next = { ...t12v, [key]: v === '' ? 0 : v };
+    set({ t12Opex: next, currentOpexTotal: Math.round(OPEX_LINES.reduce((s, l) => s + lNum(next[l.key]), 0)) });
+  };
   const commit = (next) => {
     const fixed = OPEX_LINES.filter((l) => !l.pct).reduce((s, l) => s + lNum((next.lines || {})[l.key]), 0);
-    const y1 = fixed + lNum(next.mgmtPct) / 100 * egi1;
-    set({ uwOpex: next, marketOpexPerUnit: Math.round(y1 / units) });
+    set({ uwOpex: next, marketOpexPerUnit: Math.round((fixed + lNum(next.mgmtPct) / 100 * stabEGI) / units) });
   };
-  const setLine = (key, v) => commit({ ...ux, mode: 'lines', lines: { ...(ux.lines || {}), [key]: v === '' ? 0 : v } });
-  const setPb = (k, v) => set('uwOpex', { ...ux, playbook: { ...pb, [k]: v } });
-  const applyPlaybook = () => {
-    const r = altusPlaybook({ t12pu, units, vintage: deal.vintage, egi: egi1, price: lNum(deal.purchasePrice), tier: pb.tier, taxMethod: pb.taxMethod, taxRate: pb.taxRate,
-      vacancyElevated: uw && uw.inPlaceEconVac > 0.15 });
-    commit({ ...ux, mode: 'lines', lines: r.lines, mgmtPct: r.mgmtPct, notes: r.notes, playbook: pb, source: 'playbook' });
+  // the first stabilized edit seeds the other lines from the T-12 (or zero) so the total stays whole
+  const seedLines = () => (active ? (ux.lines || {}) : OPEX_LINES.reduce((o, l) => { if (!l.pct) o[l.key] = t12 ? Math.round(lNum(t12v[l.key])) : 0; return o; }, {}));
+  const seedMgmt = () => (active ? ux.mgmtPct : (t12 && inPlaceEGI > 0 ? Math.round(lNum(t12v.mgmt) / inPlaceEGI * 1000) / 10 : 3.5));
+  const setLine = (key, v) => commit({ ...ux, mode: 'lines', mgmtPct: seedMgmt(), lines: { ...seedLines(), [key]: v === '' ? 0 : v } });
+  const setMgmt = (v) => commit({ ...ux, mode: 'lines', lines: seedLines(), mgmtPct: v });
+  const playbook = () => {
+    const t12pu = t12 ? OPEX_LINES.reduce((o, l) => { if (!l.pct) o[l.key] = lNum(t12v[l.key]) / units; return o; }, {}) : null;
+    const r = altusPlaybook({ t12pu, units, vintage: deal.vintage, egi: stabEGI, price, tier: 'secondary', taxMethod: 'prelim', taxRate: '',
+      vacancyElevated: inPlaceEGI > 0 && lNum(deal.gprAnnual) > 0 && 1 - inPlaceEGI / lNum(deal.gprAnnual) > 0.15 });
+    commit({ ...ux, mode: 'lines', lines: r.lines, mgmtPct: r.mgmtPct, notes: r.notes, source: 'playbook' });
   };
-  const fromT12 = () => {
-    const lines = {};
-    OPEX_LINES.forEach((l) => { if (!l.pct) lines[l.key] = l.cat ? Math.round(t12Total(l) || 0) : Math.round(lNum((ux.lines || {}).reserves) || 0); });
-    const mgmtPct = t12Egi > 0 ? Math.round(((cat && cat.Management) || 0) / t12Egi * 1000) / 10 : 3.5;
-    commit({ ...ux, mode: 'lines', lines, mgmtPct, notes: {}, source: 't12' });
-  };
-
-  // other income
-  const t12Rubs = cat ? (cat.RUBs || 0) : null, t12Other = cat ? (cat['Other Income'] || 0) : null;
-  const startOther = () => set('uwOtherIncome', { mode: 'lines',
-    rubsPUPM: Math.round((t12Rubs != null ? t12Rubs : 0) / units / 12), rubsPct: 100,
-    otherPUPM: Math.round((t12Other != null ? t12Other : lNum(deal.otherIncome)) / units / 12) });
-  const setO = (k, v) => set('uwOtherIncome', { ...uo, mode: 'lines', [k]: v });
-  const rubsAnnual = activeO ? units * 12 * lNum(uo.rubsPUPM) * lNum(uo.rubsPct == null ? 100 : uo.rubsPct) / 100 : null;
-  const otherAnnual = activeO ? units * 12 * lNum(uo.otherPUPM) : null;
+  const copyT12 = () => commit({ ...ux, mode: 'lines', notes: {}, source: 't12',
+    lines: OPEX_LINES.reduce((o, l) => { if (!l.pct) o[l.key] = Math.round(lNum(t12v[l.key])); return o; }, {}),
+    mgmtPct: inPlaceEGI > 0 ? Math.round(lNum(t12v.mgmt) / inPlaceEGI * 1000) / 10 : 3.5 });
 
   const fileRef = React.useRef(null);
   const t12Status = t12Data && t12Data.status;
-
-  const grid = 'minmax(170px,1.3fr) 112px 92px 132px 116px minmax(150px,1.6fr)';
-  const cell = { padding: '7px 10px', fontSize: 12.5, borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'center' };
+  const grid = 'minmax(170px,1fr) 132px 92px 132px 104px';
+  const cell = { padding: '4px 8px', fontSize: 12.5, display: 'flex', alignItems: 'center', minHeight: 36 };
   const numCell = { ...cell, justifyContent: 'flex-end', fontVariantNumeric: 'tabular-nums' };
-
-  const summary = (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: 'var(--muted)' }}>
-      <span>UW OpEx <b className="num" style={{ color: 'var(--ink)' }}>{active ? lMoney(uwOpexY1 / units) : lMoney(lNum(deal.marketOpexPerUnit))}</b>/unit</span>
-      <span>Expense ratio <b className="num" style={{ color: 'var(--ink)' }}>{egi1 > 0 ? lPct((active ? uwOpexY1 : lNum(deal.marketOpexPerUnit) * units) / egi1) : '—'}</b></span>
-      <span style={{ padding: '2px 8px', borderRadius: 999, background: active ? 'var(--accent-soft)' : 'var(--panel-3)', color: active ? 'var(--accent-2)' : 'var(--slate)', fontWeight: 600 }}>
-        {active ? 'Underwriting by line item' : 'Single $/unit'}</span>
+  const flag = (n) => n && /CONFIRM|NO TAX|placeholder/.test(n);
+  const sumRow = (label, a, b, opts = {}) => (
+    <div style={{ display: 'grid', gridTemplateColumns: grid, borderTop: opts.top ? '2px solid var(--line-2)' : '1px solid var(--line)', background: opts.shade ? 'var(--panel-2)' : undefined }}>
+      <div style={{ ...cell, fontWeight: opts.strong ? 700 : 500, color: 'var(--ink)' }}>{label}</div>
+      <div style={{ ...numCell, gridColumn: opts.pu ? undefined : 'span 2', fontWeight: opts.strong ? 700 : 500 }}>{a}</div>
+      {opts.pu && <div style={{ ...numCell, color: 'var(--muted)' }}>{opts.pu[0]}</div>}
+      <div style={{ ...numCell, gridColumn: opts.pu ? undefined : 'span 2', fontWeight: opts.strong ? 700 : 500, color: opts.accent || 'var(--ink)' }}>{b}</div>
+      {opts.pu && <div style={{ ...numCell, color: 'var(--muted)' }}>{opts.pu[1]}</div>}
     </div>);
+  const t12NOI = inPlaceEGI - t12Total, stabNOI = stabEGI - stabTotal;
 
   return (
-    <Card>
-      <SectionHead icon="table" title="Operating Expense & Other Income Detail"
-        desc="T-12 by line item next to our underwriting. Enter any line as an annual total or $ per unit."
-        right={<button type="button" style={L_BTN} onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'Hide detail' : 'Show detail'}</button>} />
-      <div style={{ marginTop: 10 }}>{summary}</div>
-      {open && (<>
-        {/* source row: T-12 status + upload */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '9px 12px', borderRadius: 8, background: 'var(--panel-2)', flexWrap: 'wrap' }}>
-          <Icon name="doc" size={14} style={{ color: 'var(--muted)' }} />
-          <span style={{ fontSize: 12.5, color: 'var(--slate)' }}>
-            {t12Status === 'parsing' ? 'Reading the T-12…'
-              : t12Status === 'error' ? 'Could not read that T-12: ' + String(t12Data.error || '').slice(0, 120)
-              : deal.t12Lines ? <span>T-12 line items from <b>{deal.t12Lines.fileName || 'upload'}</b> · {deal.t12Lines.lines.length} lines</span>
-              : 'No T-12 line items yet. Upload a T-12 to see actuals by line.'}
-          </span>
-          {onT12Upload && <>
-            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.txt" style={{ display: 'none' }}
-              onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) onT12Upload(deal.id, f); e.target.value = ''; }} />
-            <button type="button" style={{ ...L_BTN, marginLeft: 'auto' }} onClick={() => fileRef.current && fileRef.current.click()} disabled={t12Status === 'parsing'}>
-              {deal.t12Lines ? 'Replace T-12' : 'Upload T-12'}</button>
-          </>}
-        </div>
-
-        {/* OTHER INCOME */}
-        <div style={{ marginTop: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>Other Income</span>
-            {activeO
-              ? <button type="button" style={L_BTN} onClick={() => set('uwOtherIncome', { ...uo, mode: 'off' })}>Use single other-income figure</button>
-              : <button type="button" style={L_PRIMARY} onClick={startOther}>Underwrite RUBS and other income separately</button>}
+    <div style={{ marginTop: 10, border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden', maxWidth: 860 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: 'var(--panel-2)', borderBottom: '1px solid var(--line)', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, color: 'var(--slate)', marginRight: 'auto' }}>
+          {t12Status === 'parsing' ? 'Reading the T-12…'
+            : t12Status === 'error' ? 'Could not read that T-12: ' + String(t12Data.error || '').slice(0, 100)
+            : deal.t12Lines ? <span title="Hover a T-12 figure to see the line items behind it">T-12: <b>{deal.t12Lines.period || deal.t12Lines.fileName || 'upload'}</b></span>
+            : 'Enter T-12 expenses by line or upload the T-12.'}
+        </span>
+        {onT12Upload && <>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv,.pdf,.txt" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) onT12Upload(deal.id, f); e.target.value = ''; }} />
+          <button type="button" style={L_BTN} onClick={() => fileRef.current && fileRef.current.click()} disabled={t12Status === 'parsing'}>{deal.t12Lines ? 'Replace T-12' : 'Upload T-12'}</button>
+        </>}
+        {active
+          ? <ConfirmBtn label="Altus playbook" confirmLabel="Overwrite stabilized? Click again" onConfirm={playbook} style={L_BTN} />
+          : <button type="button" style={L_BTN} onClick={playbook}>Altus playbook</button>}
+        {t12 && <ConfirmBtn label="Copy T-12" confirmLabel="Overwrite stabilized? Click again" onConfirm={copyT12} style={L_BTN} />}
+        {active && <button type="button" style={L_BTN} onClick={() => set('uwOpex', { ...ux, mode: 'single' })} title="Go back to a single stabilized OpEx / unit">Clear</button>}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: 600 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: grid, background: 'var(--panel-3)' }}>
+            <div style={{ ...L_HEAD, padding: '7px 8px' }}>Expenses</div>
+            <div style={{ ...L_HEAD, padding: '7px 8px', gridColumn: 'span 2', textAlign: 'center', borderLeft: '1px solid var(--line)' }}>Current · T-12</div>
+            <div style={{ ...L_HEAD, padding: '7px 8px', gridColumn: 'span 2', textAlign: 'center', borderLeft: '1px solid var(--line)', color: 'var(--accent-2)' }}>Stabilized · Our Assumptions</div>
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 720 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px,1.3fr) 112px 104px 132px 116px 132px', padding: '0 0 4px' }}>
-                {['', 'T-12 Total', 'T-12 /Unit/Mo', 'UW /Unit/Mo', '% Units Billed', 'UW Annual'].map((h, i) => <span key={i} style={{ ...L_HEAD, textAlign: i ? 'right' : 'left', padding: '0 10px' }}>{h}</span>)}
-              </div>
-              {[
-                { k: 'rubs', label: 'RUBS / Utility Reimbursement', t12: t12Rubs, pupm: 'rubsPUPM', billed: true, annual: rubsAnnual },
-                { k: 'other', label: 'Other Income', t12: t12Other == null ? (cat ? 0 : lNum(deal.otherIncome)) : t12Other, pupm: 'otherPUPM', annual: otherAnnual, note: cat ? null : 'trailing total' },
-              ].map((r) => (
-                <div key={r.k} style={{ display: 'grid', gridTemplateColumns: 'minmax(170px,1.3fr) 112px 104px 132px 116px 132px' }}>
-                  <div style={cell}><span>{r.label}</span>{r.note && <span style={{ fontSize: 10.5, color: 'var(--faint)', marginLeft: 6 }}>{r.note}</span>}</div>
-                  <div style={numCell}>{r.t12 == null ? '—' : lMoney(r.t12)}</div>
-                  <div style={numCell}>{r.t12 == null ? '—' : lMoney(r.t12 / units / 12)}</div>
-                  <div style={{ ...numCell, padding: '4px 6px' }}>{activeO ? <FieldInput value={uo[r.pupm]} onChange={(v) => setO(r.pupm, v)} prefix="$" /> : <span style={{ color: 'var(--faint)' }}>—</span>}</div>
-                  <div style={{ ...numCell, padding: '4px 6px' }}>{r.billed ? (activeO ? <FieldInput value={uo.rubsPct == null ? 100 : uo.rubsPct} onChange={(v) => setO('rubsPct', v)} suffix="%" align="left" /> : <span style={{ color: 'var(--faint)' }}>—</span>) : null}</div>
-                  <div style={{ ...numCell, fontWeight: 600 }}>{r.annual == null ? '—' : lMoney(r.annual)}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: grid }}>
+            {['', 'Total', 'Per Unit', 'Total', 'Per Unit'].map((h, i) => <div key={i} style={{ ...L_HEAD, fontSize: 9, padding: '5px 8px', textAlign: i ? 'right' : 'left' }}>{h}</div>)}
+          </div>
+          {OPEX_LINES.map((l) => {
+            const tv = lNum(t12v[l.key]);
+            const lines = l.cat ? src.filter((x) => x.category === l.cat) : [];
+            const tip = lines.length ? lines.map((x) => x.name + ': $' + Math.round(x.total).toLocaleString()).join('\n') : undefined;
+            const note = (ux.notes || {})[l.key];
+            const uv = l.pct ? lNum(ux.mgmtPct) / 100 * stabEGI : lNum((ux.lines || {})[l.key]);
+            return (
+              <div key={l.key} style={{ display: 'grid', gridTemplateColumns: grid, borderTop: '1px solid var(--line)' }}>
+                <div style={{ ...cell, gap: 6 }} title={note || undefined}>
+                  <span style={{ color: 'var(--ink)' }}>{l.label}</span>
+                  {flag(note) && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '.05em', color: 'var(--warn)', background: 'var(--warn-soft)', borderRadius: 4, padding: '1px 5px' }}>CONFIRM</span>}
                 </div>
-              ))}
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(170px,1.3fr) 112px 104px 132px 116px 132px', background: 'var(--panel-2)' }}>
-                <div style={{ ...cell, fontWeight: 700 }}>Total Other Income</div>
-                <div style={{ ...numCell, fontWeight: 700 }}>{lMoney(cat ? (t12Rubs || 0) + (t12Other || 0) : lNum(deal.otherIncome))}</div>
-                <div style={numCell}>{lMoney((cat ? (t12Rubs || 0) + (t12Other || 0) : lNum(deal.otherIncome)) / units / 12)}</div>
-                <div style={numCell}>{activeO ? lMoney(lNum(uo.rubsPUPM) * lNum(uo.rubsPct == null ? 100 : uo.rubsPct) / 100 + lNum(uo.otherPUPM)) : ''}</div>
-                <div style={numCell} />
-                <div style={{ ...numCell, fontWeight: 700, color: 'var(--accent)' }}>{activeO ? lMoney(rubsAnnual + otherAnnual) : lMoney(uw ? uw.otherIncomeStab : 0)}</div>
-              </div>
-            </div>
-          </div>
+                <div style={numCell} title={tip}><FieldInput value={t12v[l.key] == null ? '' : Math.round(tv)} onChange={(v) => setT12(l.key, v)} prefix="$" /></div>
+                <div style={{ ...numCell, color: 'var(--muted)' }}>{l.pct ? (inPlaceEGI > 0 && tv ? lPct(tv / inPlaceEGI) + ' EGI' : '—') : (tv ? lMoney(tv / units) : '—')}</div>
+                <div style={numCell}>{l.pct
+                  ? <span className="num" style={{ color: active ? 'var(--ink)' : 'var(--faint)' }}>{active ? lMoney(uv) : '—'}</span>
+                  : <FieldInput value={active ? Math.round(uv) : ''} onChange={(v) => setLine(l.key, v)} prefix="$" />}</div>
+                <div style={numCell}>{l.pct
+                  ? <FieldInput value={active ? ux.mgmtPct : ''} placeholder={String(seedMgmt() || '')} onChange={(v) => setMgmt(v)} suffix="%" align="left" />
+                  : <FieldInput value={active ? Math.round(uv / units) : ''} onChange={(v) => setLine(l.key, (v === '' ? 0 : v) * units)} prefix="$" />}</div>
+              </div>);
+          })}
+          {sumRow('Total Expenses', lMoney(t12Total), lMoney(stabTotal), { top: true, strong: true, shade: true, accent: 'var(--accent)', pu: [lMoney(t12Total / units), lMoney(stabTotal / units)] })}
+          {sumRow('Expense Ratio', inPlaceEGI > 0 ? lPct(t12Total / inPlaceEGI) : '—', stabEGI > 0 ? lPct(stabTotal / stabEGI) : '—')}
+          {sumRow('Net Operating Income', lMoney(t12NOI), lMoney(stabNOI), { strong: true, accent: 'var(--pos)' })}
+          {sumRow('Cap Rate', price > 0 ? lPct(t12NOI / price, 2) : '—', price > 0 ? lPct(stabNOI / price, 2) : '—')}
+          {sumRow('Yield on Cost', basis > 0 ? lPct(t12NOI / basis, 2) : '—', basis > 0 ? lPct(stabNOI / basis, 2) : '—')}
         </div>
-
-        {/* OPERATING EXPENSES */}
-        <div style={{ marginTop: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', marginRight: 'auto' }}>Operating Expenses</span>
-            <select value={pb.tier} onChange={(e) => setPb('tier', e.target.value)} style={L_SELECT} aria-label="Market tier">
-              <option value="tertiary">Tertiary market</option><option value="secondary">Secondary market</option><option value="strong_secondary">Strong secondary</option>
-            </select>
-            <select value={pb.taxMethod} onChange={(e) => setPb('taxMethod', e.target.value)} style={L_SELECT} aria-label="Tax method">
-              <option value="prelim">Taxes: T-12 +15%</option><option value="reassess">Taxes: reassess to price</option>
-            </select>
-            {pb.taxMethod === 'reassess' && <>
-              <select value="" onChange={(e) => e.target.value && setPb('taxRate', Number(e.target.value))} style={L_SELECT} aria-label="County rate">
-                <option value="">County rate…</option>
-                {COUNTY_TAX.map(([st, c, r]) => <option key={st + c} value={r}>{c}, {st} · {r}%</option>)}
-              </select>
-              <FieldInput value={pb.taxRate} onChange={(v) => setPb('taxRate', v)} suffix="%" align="left" width={88} />
-            </>}
-            {active
-              ? <ConfirmBtn label="Re-apply Altus playbook" confirmLabel="Overwrite lines? Click again" onConfirm={applyPlaybook} style={L_BTN} />
-              : <button type="button" style={L_PRIMARY} onClick={applyPlaybook}>Apply Altus playbook</button>}
-            {cat && (active
-              ? <ConfirmBtn label="Reset to T-12" confirmLabel="Overwrite lines? Click again" onConfirm={fromT12} style={L_BTN} />
-              : <button type="button" style={L_BTN} onClick={fromT12}>Start from T-12 actuals</button>)}
-            {active && <button type="button" style={L_BTN} onClick={() => set('uwOpex', { ...ux, mode: 'single' })}>Use single $/unit</button>}
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <div style={{ minWidth: 820 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: grid, padding: '0 0 4px' }}>
-                {['Line Item', 'T-12 Total', 'T-12 /Unit', 'UW Total', 'UW /Unit', 'Basis'].map((h, i) => <span key={i} style={{ ...L_HEAD, textAlign: i && i < 5 ? 'right' : 'left', padding: '0 10px' }}>{h}</span>)}
-              </div>
-              {OPEX_LINES.map((l) => {
-                const tt = t12Total(l);
-                const ut = uwTotal(l);
-                const note = (ux.notes || {})[l.key] || (l.pct ? '% of EGI · grows with income' : l.key === 'reserves' ? 'UW only · above NOI' : '');
-                return (
-                  <div key={l.key} style={{ display: 'grid', gridTemplateColumns: grid }}>
-                    <div style={cell}>{l.label}</div>
-                    <div style={numCell}>{tt == null ? '—' : lMoney(tt)}</div>
-                    <div style={numCell}>{tt == null ? '—' : (l.pct ? (t12Egi > 0 ? lPct(tt / t12Egi) + ' EGI' : '—') : lMoney(tt / units))}</div>
-                    <div style={{ ...numCell, padding: '4px 6px' }}>
-                      {!active ? <span style={{ color: 'var(--faint)' }}>—</span>
-                        : l.pct ? <span className="num">{lMoney(ut)}</span>
-                        : <FieldInput value={Math.round(lNum((ux.lines || {})[l.key]))} onChange={(v) => setLine(l.key, v)} prefix="$" />}
-                    </div>
-                    <div style={{ ...numCell, padding: '4px 6px' }}>
-                      {!active ? <span style={{ color: 'var(--faint)' }}>—</span>
-                        : l.pct ? <FieldInput value={ux.mgmtPct} onChange={(v) => commit({ ...ux, mode: 'lines', mgmtPct: v })} suffix="%" align="left" />
-                        : <FieldInput value={Math.round(lNum((ux.lines || {})[l.key]) / units)} onChange={(v) => setLine(l.key, (v === '' ? 0 : v) * units)} prefix="$" />}
-                    </div>
-                    <div style={{ ...cell, fontSize: 11, color: /CONFIRM|NO TAX|elevated/.test(note) ? 'var(--warn)' : 'var(--faint)', lineHeight: 1.35 }}>{note}</div>
-                  </div>);
-              })}
-              <div style={{ display: 'grid', gridTemplateColumns: grid, background: 'var(--panel-2)' }}>
-                <div style={{ ...cell, fontWeight: 700 }}>Total Operating Expenses</div>
-                <div style={{ ...numCell, fontWeight: 700 }}>{lMoney(t12OpexTotal)}</div>
-                <div style={{ ...numCell, fontWeight: 700 }}>{lMoney(t12OpexTotal / units)}</div>
-                <div style={{ ...numCell, fontWeight: 700, color: 'var(--accent)' }}>{active ? lMoney(uwOpexY1) : lMoney(lNum(deal.marketOpexPerUnit) * units)}</div>
-                <div style={{ ...numCell, fontWeight: 700, color: 'var(--accent)' }}>{active ? lMoney(uwOpexY1 / units) : lMoney(lNum(deal.marketOpexPerUnit))}</div>
-                <div style={{ ...cell, fontSize: 11.5, color: 'var(--muted)' }}>
-                  Expense ratio: T-12 {t12Egi > 0 ? lPct(t12OpexTotal / t12Egi) : '—'} · UW {egi1 > 0 ? lPct((active ? uwOpexY1 : lNum(deal.marketOpexPerUnit) * units) / egi1) : '—'}
-                </div>
-              </div>
-            </div>
-          </div>
-          {!active && <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>
-            The model is using the single OpEx/unit figure above. Apply the playbook or start from the T-12 to underwrite each line.</div>}
-        </div>
-      </>)}
-    </Card>);
+      </div>
+      {!active && <div style={{ fontSize: 11.5, color: 'var(--muted)', padding: '8px 12px', borderTop: '1px solid var(--line)' }}>
+        Stabilized is using the single OpEx / unit above. Enter any line, run the Altus playbook or copy the T-12 to underwrite by line.</div>}
+    </div>);
 }
 
-Object.assign(window, { LineItemsSection, altusPlaybook, t12ByCategory, OPEX_LINES });
+Object.assign(window, { ExpenseBreakout, altusPlaybook, t12ByCategory, t12OpexLines, stabOpexFor, OPEX_LINES, useOpenState });

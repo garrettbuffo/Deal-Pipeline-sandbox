@@ -158,83 +158,168 @@ function LinkedFigure({ value }) {
     </div>);
 }
 
-function IncomeVacancySection({ deal, set }) {
+// Vacancy line shown read-only while the rent roll drives it.
+function VacLineLinked({ label, value, gpr, note }) {
+  const box = { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', height: 34, padding: '0 10px', borderRadius: 7, border: '1px dashed var(--line-2)', background: 'var(--panel-3)' };
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 84px 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
+      <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>{label}</span>{note && <Note>{note}</Note>}</div>
+      <div className="num" style={{ ...box, fontSize: 12.5, color: 'var(--slate)' }}>{gpr > 0 ? (value / gpr * 100).toFixed(1) + '%' : '—'}</div>
+      <div className="num" style={{ ...box, fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{moneyFull(value)}</div>
+    </div>);
+}
+
+/* Market rents by unit type — the template's Property Info "Market Rents" block. */
+function MarketRentsBlock({ deal, set, pr }) {
+  const [open, setOpen] = (window.useOpenState || ((k, d) => React.useState(d)))('altus_mktrents_open', true);
+  const linked = deal.incomeFromRR !== false;
+  const ov = deal.marketRents || {};
+  const setMkt = (type, v) => window.setWithRentRoll(deal, set, { marketRents: { ...ov, [type]: v === '' || !v ? undefined : v } });
+  const g = 'minmax(110px,1.3fr) 56px 60px 92px 64px 118px 64px';
+  const c = { padding: '4px 8px', fontSize: 12.5, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', fontVariantNumeric: 'tabular-nums', minHeight: 34 };
+  const psf = (v, sf) => (v && sf ? '$' + (v / sf).toFixed(2) : '—');
+  return (
+    <div style={{ marginTop: 14, paddingBottom: 14, borderBottom: '1px solid var(--line)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--font)' }}>
+          <span style={{ display: 'inline-block', transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .12s', color: 'var(--muted)', fontSize: 10 }}>▶</span>
+          <Lbl>Market Rents by Unit Type</Lbl>
+        </button>
+        <span style={{ fontSize: 11.5, color: 'var(--faint)', marginTop: -5 }}>
+          {pr.units} units from the rent roll · loss to lease {moneyFull(pr.ltlPerUnit)}/unit ({pr.ltlPct == null ? '—' : (pr.ltlPct * 100).toFixed(1) + '%'})
+        </span>
+        <button type="button" onClick={() => (linked ? set('incomeFromRR', false) : set({ incomeFromRR: true, ...window.rentRollFields({ ...deal, incomeFromRR: true }) }))}
+          style={{ marginLeft: 'auto', marginTop: -5, border: '1px solid var(--line-2)', background: 'var(--panel)', color: 'var(--slate)', borderRadius: 6, padding: '3px 9px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}>
+          {linked ? 'Enter income by hand' : 'Price from rent roll'}</button>
+      </div>
+      {open && <div style={{ overflowX: 'auto', marginTop: 4 }}>
+        <div style={{ minWidth: 580, maxWidth: 760 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: g }}>
+            {['Unit Type', 'Units', 'SF', 'In-Place', '$/SF', 'Market Rent', '$/SF'].map((h, i) =>
+              <div key={i} style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: i >= 5 ? 'var(--accent-2)' : 'var(--muted)', padding: '4px 8px', textAlign: i ? 'right' : 'left' }}>{h}</div>)}
+          </div>
+          {pr.types.map((t) => (
+            <div key={t.type} style={{ display: 'grid', gridTemplateColumns: g, borderTop: '1px solid var(--line)' }}>
+              <div style={{ ...c, justifyContent: 'flex-start', fontWeight: 600, color: 'var(--ink)' }}>{t.type}</div>
+              <div style={c}>{t.units}</div>
+              <div style={c}>{t.sf ? Math.round(t.sf).toLocaleString() : '—'}</div>
+              <div style={c}>{moneyFull(t.inPlace)}</div>
+              <div style={{ ...c, color: 'var(--muted)' }}>{psf(t.inPlace, t.sf)}</div>
+              <div style={c} title={'Default ' + moneyFull(t.dflt) + ' (' + t.dfltSrc + ')'}>
+                <FieldInput value={t.overridden ? ov[t.type] : ''} placeholder={Math.round(t.dflt).toLocaleString('en-US')} onChange={(v) => setMkt(t.type, v)} prefix="$" />
+              </div>
+              <div style={{ ...c, color: 'var(--muted)' }}>{psf(t.market, t.sf)}</div>
+            </div>))}
+          <div style={{ display: 'grid', gridTemplateColumns: g, borderTop: '2px solid var(--line-2)', background: 'var(--panel-2)', fontWeight: 700 }}>
+            <div style={{ ...c, justifyContent: 'flex-start' }}>Total / Avg</div>
+            <div style={c}>{pr.units}</div>
+            <div style={c}>{pr.avgSf ? Math.round(pr.avgSf).toLocaleString() : '—'}</div>
+            <div style={c}>{moneyFull(pr.avgIn)}</div>
+            <div style={{ ...c, color: 'var(--muted)' }}>{psf(pr.avgIn, pr.avgSf)}</div>
+            <div style={{ ...c, color: 'var(--accent-2)' }}>{moneyFull(pr.avgMkt)}</div>
+            <div style={{ ...c, color: 'var(--muted)' }}>{psf(pr.avgMkt, pr.avgSf)}</div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--faint)', marginTop: 6 }}>
+            Blank market rent = the rent roll's market rent, floored at the type's average in-place lease. Annual income {moneyFull(pr.inPlaceAnnual)} in-place vs {moneyFull(pr.gprAnnual)} at market.
+          </div>
+        </div>
+      </div>}
+    </div>);
+}
+
+function IncomeVacancySection({ deal, set, onT12Upload, t12Data }) {
   const units = deal.units || 1;
+  const pr = window.rentRollPricing ? window.rentRollPricing(deal) : null;
+  const rrLinked = !!pr && deal.incomeFromRR !== false;
   const gpr = num(deal.gprAnnual);
   const phys = num(deal.physVacLoss), ltl = num(deal.lossToLease);
   const comb = num(deal.concessions) + num(deal.badDebt);
   const other = num(deal.otherIncome);
+  const curRubs = num(deal.curRubs), curOther = other - curRubs;
   const totalLoss = phys + ltl + comb;
   const inPlaceVac = gpr > 0 ? totalLoss / gpr : 0;
   const inPlaceEGI = gpr > 0 ? gpr - totalLoss + other : num(deal.trailingEGI);
-  const curOpex = num(deal.currentOpexTotal);
+  const t12Lines = window.t12OpexLines ? window.t12OpexLines(deal) : null;
+  const curOpex = t12Lines ? (window.OPEX_LINES || []).reduce((s, l) => s + num(t12Lines[l.key]), 0) : num(deal.currentOpexTotal);
   const inPlaceNOI = inPlaceEGI - curOpex;
 
   const stabVac = (deal.stabEconVac == null || deal.stabEconVac === '') ? inPlaceVac : num(deal.stabEconVac) / 100;
+  // Stabilized RUBS / other income per unit per month; until entered they carry the trailing figures.
   const uo = deal.uwOtherIncome && deal.uwOtherIncome.mode === 'lines' ? deal.uwOtherIncome : null;
-  const otherLines = !!uo;
-  const opexLines = !!(deal.uwOpex && deal.uwOpex.mode === 'lines');
-  const stabOther = uo ? units * 12 * (num(uo.rubsPUPM) * num(uo.rubsPct == null ? 100 : uo.rubsPct) / 100 + num(uo.otherPUPM))
-    : (deal.stabOtherIncome == null || deal.stabOtherIncome === '') ? other : num(deal.stabOtherIncome);
+  const legacyStab = !uo && !(deal.stabOtherIncome == null || deal.stabOtherIncome === '');
+  const dRubs = curRubs / units / 12;
+  const dOther = legacyStab ? Math.max(0, num(deal.stabOtherIncome) / units / 12 - dRubs) : curOther / units / 12;
+  const rubsPU = uo ? num(uo.rubsPUPM) * num(uo.rubsPct == null ? 100 : uo.rubsPct) / 100 : dRubs;
+  const otherPU = uo ? num(uo.otherPUPM) : dOther;
+  const stabOther = uo ? units * 12 * (rubsPU + otherPU) : legacyStab ? num(deal.stabOtherIncome) : other;
+  const setStabOI = (k, v) => set('uwOtherIncome', { mode: 'lines', rubsPct: 100,
+    rubsPUPM: Math.round(uo ? rubsPU : dRubs), otherPUPM: Math.round(uo ? otherPU : dOther), [k]: v === '' ? 0 : v });
   const stabEGI = gpr * (1 - stabVac) + stabOther;
-  const ux = opexLines ? deal.uwOpex : null;
-  const stabOpex = ux ? Object.keys(ux.lines || {}).reduce((s, k) => s + num(ux.lines[k]), 0) + num(ux.mgmtPct) / 100 * stabEGI
-    : num(deal.marketOpexPerUnit) * units;
-  const stabOpexPerUnit = ux ? stabOpex / units : num(deal.marketOpexPerUnit);
+  const opexLines = !!(deal.uwOpex && deal.uwOpex.mode === 'lines');
+  const stabOpex = window.stabOpexFor ? window.stabOpexFor(deal, stabEGI) : num(deal.marketOpexPerUnit) * units;
   const stabNOI = stabEGI - stabOpex;
   const rpu = gpr > 0 ? gpr / units / 12 : 0;
   const setComb = (v) => set({ concessions: v, badDebt: 0 });
+  const [showExp, setShowExp] = (window.useOpenState || ((k, d) => React.useState(d)))('altus_opex_open', false);
 
   const panel = { background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px' };
+  const row = { display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '6px 0' };
+  const pupm = (v) => (v && units ? moneyFull(v / units / 12) + ' / unit / mo' : '—');
 
   return (
     <Card>
       <SectionHead icon="pulse" title="Income & Economic Vacancy"
-        desc="Left = in-place (T-12 / rent roll). Right = our stabilized assumptions. Parse a Rent Roll & T-12 to auto-fill." />
+        desc={rrLinked ? 'Left = in-place (rent roll + T-12). Right = our stabilized assumptions. GPR, vacancy and loss to lease price off the rent roll.'
+          : 'Left = in-place (T-12 / rent roll). Right = our stabilized assumptions. Upload a rent roll and T-12 to auto-fill.'} />
 
       {/* GPR — applies to both columns */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 200px 200px', gap: 14, alignItems: 'end', marginTop: 16,
-        paddingBottom: 14, borderBottom: '1px solid var(--line)' }}>
+        paddingBottom: pr ? 0 : 14, borderBottom: pr ? 'none' : '1px solid var(--line)' }}>
         <div>
           <Lbl>Gross Potential Rent</Lbl>
-          <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>Annual market rent across all units — the basis for every vacancy line below.</div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{rrLinked ? 'Every unit at the market rents below.' : 'Annual market rent across all units — the basis for every vacancy line below.'}</div>
         </div>
-        <div>
-          <FieldInput value={deal.gprAnnual} onChange={(v) => set('gprAnnual', v || 0)} prefix="$" />
-        </div>
+        <div>{rrLinked ? <LinkedFigure value={moneyFull(gpr)} /> : <FieldInput value={deal.gprAnnual} onChange={(v) => set('gprAnnual', v || 0)} prefix="$" />}</div>
         <div style={{ textAlign: 'right' }}>
           <div className="num" style={{ fontSize: 17, fontWeight: 700, color: 'var(--ink)' }}>{rpu ? moneyFull(rpu) : '—'}</div>
           <div style={{ fontSize: 11, color: 'var(--faint)' }}>rent / unit / month</div>
         </div>
       </div>
+      {pr && <MarketRentsBlock deal={deal} set={set} pr={pr} />}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
-        {/* CURRENT / T-12 */}
+        {/* CURRENT */}
         <div style={panel}>
-          <PanelHead>Current · T-12 / Rent Roll</PanelHead>
+          <PanelHead>Current · Rent Roll & T-12</PanelHead>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 84px 116px', gap: 8, padding: '0 0 2px' }}>
             <span />
             <span style={{ fontSize: 9.5, color: 'var(--faint)', fontWeight: 600, textTransform: 'uppercase', textAlign: 'center' }}>% of GPR</span>
             <span style={{ fontSize: 9.5, color: 'var(--faint)', fontWeight: 600, textTransform: 'uppercase', textAlign: 'center' }}>Annual $</span>
           </div>
-          <VacLine label="Physical Vacancy" value={phys} gpr={gpr} onChange={(v) => set('physVacLoss', v)} />
-          <VacLine label="Loss to Lease" value={ltl} gpr={gpr} onChange={(v) => set('lossToLease', v)} />
+          {rrLinked
+            ? <VacLineLinked label="Physical Vacancy" value={phys} gpr={gpr} note={(pr.units - Math.round(pr.occ * pr.units)) + ' vacant at in-place rent'} />
+            : <VacLine label="Physical Vacancy" value={phys} gpr={gpr} onChange={(v) => set('physVacLoss', v)} />}
+          {rrLinked
+            ? <VacLineLinked label="Loss to Lease" value={ltl} gpr={gpr} note="market vs avg in-place" />
+            : <VacLine label="Loss to Lease" value={ltl} gpr={gpr} onChange={(v) => set('lossToLease', v)} />}
           <VacLine label="Concessions & Bad Debt" value={comb} gpr={gpr} onChange={setComb} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
-            <div>
-              <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Other Income</span>
-              <Note>{other && units ? moneyFull(other / units / 12) + ' / unit / mo' : '—'}</Note>
-            </div>
-            <FieldInput value={deal.otherIncome} onChange={(v) => set('otherIncome', v || 0)} prefix="$" />
+          <div style={row}>
+            <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>RUBS</span><Note>{pupm(curRubs)}</Note></div>
+            <FieldInput value={deal.curRubs == null ? '' : curRubs} onChange={(v) => set({ curRubs: num(v), otherIncome: num(v) + curOther })} prefix="$" placeholder="0" />
+          </div>
+          <div style={row}>
+            <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Other Income</span><Note>{pupm(curOther)}</Note></div>
+            <FieldInput value={Math.round(curOther)} onChange={(v) => set('otherIncome', curRubs + num(v))} prefix="$" />
           </div>
           <OutRow label="In-Place Effective Gross Income" value={moneyFull(inPlaceEGI)} strong accent="var(--accent)"
             hint={pct1(inPlaceVac) + ' econ. vacancy'} />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '8px 0 6px' }}>
+          <div style={{ ...row, padding: '8px 0 6px' }}>
             <div>
               <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Current Operating Expenses</span>
-              <Note>{curOpex && units ? moneyFull(curOpex / units) + ' / unit' : '—'}</Note>
+              <Note>{curOpex && units ? moneyFull(curOpex / units) + ' / unit' + (t12Lines ? ' · T-12 line items below' : '') : '—'}</Note>
             </div>
-            <FieldInput value={deal.currentOpexTotal} onChange={(v) => set('currentOpexTotal', v || 0)} prefix="$" />
+            {t12Lines ? <LinkedFigure value={moneyFull(curOpex)} /> : <FieldInput value={deal.currentOpexTotal} onChange={(v) => set('currentOpexTotal', v || 0)} prefix="$" />}
           </div>
           <OutRow label="In-Place NOI" value={moneyFull(inPlaceNOI)} strong />
         </div>
@@ -242,35 +327,46 @@ function IncomeVacancySection({ deal, set }) {
         {/* STABILIZED */}
         <div style={{ ...panel, borderColor: 'var(--accent-soft)' }}>
           <PanelHead accent="var(--accent-2)">Stabilized · Our Assumptions</PanelHead>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
-            <div>
-              <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Economic Vacancy</span>
-              <Note>{gpr ? moneyFull(gpr * stabVac) + ' / yr' : '—'}</Note>
-            </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, padding: '0 0 2px' }}>
+            <span />
+            <span style={{ fontSize: 9.5, color: 'var(--faint)', fontWeight: 600, textTransform: 'uppercase', textAlign: 'center' }}>Input</span>
+          </div>
+          <div style={row}>
+            <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Economic Vacancy</span><Note>{gpr ? moneyFull(gpr * stabVac) + ' / yr' : '—'}</Note></div>
             <FieldInput value={deal.stabEconVac} onChange={(v) => set('stabEconVac', v)} suffix="%" align="left" placeholder={String(round1(inPlaceVac))} />
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
-            <div>
-              <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Other Income</span>
-              <Note>{otherLines ? moneyFull(stabOther / units / 12) + ' / unit / mo · RUBS + other from detail below' : stabOther && units ? moneyFull(stabOther / units / 12) + ' / unit / mo · carries trailing' : 'carries trailing'}</Note>
-            </div>
-            {otherLines
-              ? <LinkedFigure value={moneyFull(stabOther)} />
-              : <FieldInput value={deal.stabOtherIncome} onChange={(v) => set('stabOtherIncome', v)} prefix="$" placeholder={String(Math.round(other))} />}
+          <div style={row}>
+            <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>RUBS / unit / mo</span><Note>{moneyFull(rubsPU * units * 12)} / yr{uo ? '' : ' · carries trailing'}</Note></div>
+            <FieldInput value={uo ? uo.rubsPUPM : ''} onChange={(v) => setStabOI('rubsPUPM', v)} prefix="$" placeholder={String(Math.round(dRubs))} />
+          </div>
+          <div style={row}>
+            <div><span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Other Income / unit / mo</span><Note>{moneyFull(otherPU * units * 12)} / yr{uo ? '' : ' · carries trailing'}</Note></div>
+            <FieldInput value={uo ? uo.otherPUPM : ''} onChange={(v) => setStabOI('otherPUPM', v)} prefix="$" placeholder={String(Math.round(dOther))} />
           </div>
           <OutRow label="Stabilized Effective Gross Income" value={moneyFull(stabEGI)} strong accent="var(--accent)" />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '8px 0 6px' }}>
+          <div style={{ ...row, padding: '8px 0 6px' }}>
             <div>
               <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>OpEx / Unit</span>
-              <Note>{opexLines ? moneyFull(stabOpex) + ' total · sum of line items below' : stabOpex ? moneyFull(stabOpex) + ' total' : '—'}</Note>
+              <Note>{stabOpex ? moneyFull(stabOpex) + ' total' + (opexLines ? ' · line items below' : '') : '—'}</Note>
             </div>
-            {opexLines
-              ? <LinkedFigure value={moneyFull(stabOpexPerUnit)} />
-              : <FieldInput value={deal.marketOpexPerUnit} onChange={(v) => set('marketOpexPerUnit', v || 0)} prefix="$" />}
+            {opexLines ? <LinkedFigure value={moneyFull(stabOpex / units)} /> : <FieldInput value={deal.marketOpexPerUnit} onChange={(v) => set('marketOpexPerUnit', v || 0)} prefix="$" />}
           </div>
           <OutRow label="Stabilized NOI" value={moneyFull(stabNOI)} strong accent="var(--pos)" />
         </div>
       </div>
+
+      {window.ExpenseBreakout && <>
+        <button type="button" onClick={() => setShowExp(!showExp)} aria-expanded={showExp}
+          style={{ marginTop: 14, width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 8, cursor: 'pointer',
+            border: '1px solid var(--line)', background: showExp ? 'var(--panel-2)' : 'var(--panel)', fontFamily: 'var(--font)', textAlign: 'left' }}>
+          <span style={{ display: 'inline-block', transform: showExp ? 'rotate(90deg)' : 'none', transition: 'transform .12s', color: 'var(--muted)', fontSize: 10 }}>▶</span>
+          <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink)' }}>{showExp ? 'Hide' : 'Show'} operating expense detail</span>
+          <span className="num" style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--muted)' }}>
+            T-12 {curOpex ? moneyFull(curOpex / units) : '—'}/unit · Stabilized {stabOpex ? moneyFull(stabOpex / units) : '—'}/unit{opexLines ? ' · by line item' : ''}
+          </span>
+        </button>
+        {showExp && <window.ExpenseBreakout deal={deal} set={set} inPlaceEGI={inPlaceEGI} stabEGI={stabEGI} onT12Upload={onT12Upload} t12Data={t12Data} />}
+      </>}
     </Card>
   );
 }
@@ -451,18 +547,18 @@ function FinFooter({ uw, goingInDSCR, assumed }) {
       {assumed && <FootStat label="LTV" value={ltv == null ? '—' : (ltv * 100).toFixed(1) + '%'} />}
       <FootStat label="Annual Debt Service" value={moneyFull(ds1)} />
       <FootStat label="Equity Required" value={moneyFull(uw.initialEquity)} sub="incl. closing + capex" />
-      <FootStat tone="lender" label="Going-In DSCR" value={goingInDSCR == null ? '—' : goingInDSCR.toFixed(2) + 'x'}
-        accent={low ? 'var(--neg)' : 'var(--lender)'} sub={minD ? (low ? 'below ' : 'lender min ') + minD.toFixed(2) + 'x' : 'Yr 1 NOI ÷ DS'} />
-      <FootStat tone="lender" label="Going-In Debt Yield" value={dy == null ? '—' : pct1(dy)} accent="var(--lender)" sub="Yr 1 NOI ÷ loan" />
+      <FootStat tone="boxed" label="Going-In DSCR" value={goingInDSCR == null ? '—' : goingInDSCR.toFixed(2) + 'x'}
+        accent={low ? 'var(--neg)' : undefined} sub={minD ? (low ? 'below ' : 'min ') + minD.toFixed(2) + 'x' : 'Yr 1 NOI ÷ DS'} />
+      <FootStat tone="boxed" label="Going-In Debt Yield" value={dy == null ? '—' : pct1(dy)} sub="Yr 1 NOI ÷ loan" />
     </div>
   );
 }
 function FootStat({ label, value, sub, accent, tone }) {
-  if (tone === 'lender') return (
-    <div style={{ background: 'var(--lender-soft)', borderRadius: 7, padding: '7px 10px', margin: '-7px 0' }}>
-      <div style={{ fontSize: 10, color: 'var(--lender)', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
-      <div className="num" style={{ fontSize: 16, fontWeight: 700, color: accent || 'var(--lender)' }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: 'var(--lender)', opacity: .8, marginTop: 2 }}>{sub}</div>}
+  if (tone === 'boxed') return (
+    <div style={{ border: '1px solid var(--line-2)', borderRadius: 7, padding: '6px 10px', margin: '-7px 0' }}>
+      <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      <div className="num" style={{ fontSize: 16, fontWeight: 700, color: accent || 'var(--ink)' }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 2 }}>{sub}</div>}
     </div>);
   return (
     <div>
@@ -534,9 +630,9 @@ function RefiSection({ deal, set, uw }) {
           <FootStat label="Old Loan Payoff" value={moneyFull(uw.refiPayoff)} />
           <FootStat label="Refi Loan Fees" value={moneyFull(uw.refiCost)} sub={(uw.refiCostPct ? uw.refiCostPct.pct : 2) + '% of loan'} />
           <FootStat label="Cash-Out to Equity" value={moneyFull(uw.refiCashOut)} accent={uw.refiCashOut >= 0 ? 'var(--pos)' : 'var(--neg)'} />
-          <FootStat tone="lender" label="Refi DSCR" value={uw.refiDSCR == null ? '—' : uw.refiDSCR.toFixed(2) + 'x'} accent={refiLow ? 'var(--neg)' : 'var(--lender)'}
-            sub={refiMinD ? (refiLow ? 'below ' : 'lender min ') + refiMinD.toFixed(2) + 'x' : 'refi-yr NOI ÷ new DS'} />
-          <FootStat tone="lender" label="Refi Debt Yield" value={uw.refiDebtYield == null ? '—' : pct1(uw.refiDebtYield)} accent="var(--lender)" sub="refi-yr NOI ÷ new loan" />
+          <FootStat tone="boxed" label="Refi DSCR" value={uw.refiDSCR == null ? '—' : uw.refiDSCR.toFixed(2) + 'x'} accent={refiLow ? 'var(--neg)' : undefined}
+            sub={refiMinD ? (refiLow ? 'below ' : 'min ') + refiMinD.toFixed(2) + 'x' : 'refi-yr NOI ÷ new DS'} />
+          <FootStat tone="boxed" label="Refi Debt Yield" value={uw.refiDebtYield == null ? '—' : pct1(uw.refiDebtYield)} sub="refi-yr NOI ÷ new loan" />
         </div>
       </>)}
     </Card>
@@ -549,26 +645,26 @@ function CashFlowTable({ uw, showReturns = true }) {
   const colW = 116, labelW = 200;
   const grid = `${labelW}px repeat(${cols.length}, minmax(${colW}px, 1fr))`;
   const headLabel = (y) => y === 0 ? 'Acq Year' : 'Year ' + y;
-  // tone 'lender' = lender metrics (debt yield, DSCR): warm shading sets them apart from equity yields
-  const Row = ({ label, hint, get, fmt, strong, accent, neg, top, tone }) => {
-    const lender = tone === 'lender';
-    return (
-    <div style={{ display: 'grid', gridTemplateColumns: grid, alignItems: lender ? 'stretch' : 'center', background: lender ? 'var(--lender-soft)' : undefined, borderTop: top ? '1px solid var(--line-2)' : '1px solid var(--line)' }}>
-      <div style={{ padding: '9px 14px', position: 'sticky', left: 0, background: lender ? 'var(--lender-soft)' : 'var(--panel)', zIndex: 1, boxShadow: lender ? 'inset 3px 0 0 var(--lender)' : 'none' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: strong || lender ? 600 : 400, color: lender ? 'var(--lender)' : 'var(--ink)' }}>
-          {label}
-          {lender && <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.07em', padding: '1px 5px', borderRadius: 4, background: 'var(--panel)', color: 'var(--lender)' }}>LENDER</span>}
-        </div>
-        {hint && <div style={{ fontSize: 10.5, color: lender ? 'var(--lender)' : 'var(--faint)', opacity: lender ? .75 : 1 }}>{hint}</div>}
+  const Row = ({ label, hint, get, fmt, strong, accent, neg, top }) => (
+    <div style={{ display: 'grid', gridTemplateColumns: grid, alignItems: 'center', borderTop: top ? '1px solid var(--line-2)' : '1px solid var(--line)' }}>
+      <div style={{ padding: '9px 14px', position: 'sticky', left: 0, background: 'var(--panel)', zIndex: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: strong ? 600 : 400, color: 'var(--ink)' }}>{label}</div>
+        {hint && <div style={{ fontSize: 10.5, color: 'var(--faint)' }}>{hint}</div>}
       </div>
       {cols.map((r) => {
         const v = get(r); const txt = fmt(v, r);
         const isNeg = neg && typeof v === 'number' && v < 0;
-        return <div key={r.year} className="num" style={{ padding: '9px 14px', textAlign: 'right', fontSize: strong ? 13.5 : 12.5, fontWeight: strong || lender ? 700 : 500, color: isNeg ? 'var(--neg)' : (accent || (lender ? 'var(--lender)' : strong ? 'var(--ink)' : 'var(--slate)')), background: lender ? 'transparent' : r.year === 0 ? 'var(--panel-2)' : 'transparent', display: lender ? 'flex' : undefined, alignItems: 'center', justifyContent: 'flex-end' }}>{txt}</div>;
+        return <div key={r.year} className="num" style={{ padding: '9px 14px', textAlign: 'right', fontSize: strong ? 13.5 : 12.5, fontWeight: strong ? 700 : 500, color: isNeg ? 'var(--neg)' : (accent || (strong ? 'var(--ink)' : 'var(--slate)')), background: r.year === 0 ? 'var(--panel-2)' : 'transparent' }}>{txt}</div>;
       })}
     </div>
-    );
-  };
+  );
+  // A light outline groups the debt metrics apart from the equity yields without recoloring them.
+  const Boxed = ({ children }) => (
+    <div style={{ position: 'relative' }}>
+      {children}
+      <div aria-hidden="true" style={{ position: 'absolute', inset: '3px 6px', border: '1px solid var(--line-2)', borderRadius: 8, pointerEvents: 'none', zIndex: 3 }} />
+    </div>
+  );
   return (
     <Card pad={false}>
       <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -594,8 +690,10 @@ function CashFlowTable({ uw, showReturns = true }) {
           <Row label="Net Sale Proceeds" hint={'at exit, year ' + uw.hold} get={(r) => r.saleProceeds} fmt={(v) => (v ? moneyFull(v) : '—')} accent="var(--navy)" />
           <Row label="Total Cash Flow to Equity" hint="net CF + refi ROC + sale" get={(r) => r.totalCashFlow} fmt={moneyFull} strong accent="var(--pos)" neg />
           <Row top label="Net Revenue Growth" hint="YoY EGI Δ · rent growth + vacancy" get={(r) => r.netRevGrowth} fmt={(v) => (v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%')} />
-          <Row top tone="lender" label="Debt Yield" hint="NOI ÷ loan balance" get={(r) => r.debtYield} fmt={(v) => (v == null ? '—' : pct1(v))} />
-          <Row tone="lender" label="DSCR" hint="NOI ÷ debt service" get={(r) => r.dscr} fmt={(v) => (v == null ? '—' : v.toFixed(2) + 'x')} />
+          <Boxed>
+            <Row top label="Debt Yield" hint="NOI ÷ loan balance" get={(r) => r.debtYield} fmt={(v) => (v == null ? '—' : pct1(v))} />
+            <Row label="DSCR" hint="NOI ÷ debt service" get={(r) => r.dscr} fmt={(v) => (v == null ? '—' : v.toFixed(2) + 'x')} />
+          </Boxed>
           <Row top label="Yield on Cost" hint="NOI ÷ total basis" get={(r) => r.yieldOnCost} fmt={pct1} />
           <Row label="Cash-on-Cash Yield" hint="net CF ÷ equity balance" get={(r) => r.cashOnCash} fmt={(v) => (v == null ? '—' : pct1(v))} />
           <Row label="Principal Paydown" hint="amortization ÷ equity balance" get={(r) => r.principalPaydownPct} fmt={(v) => (v == null || v === 0 ? '—' : pct1(v))} />
@@ -750,7 +848,6 @@ function PropertyFullUW({ property, onChange }) {
       </Card>
       <PricingBasis deal={property} set={onChange} m={m} />
       <IncomeVacancySection deal={property} set={onChange} />
-      {window.LineItemsSection && <window.LineItemsSection deal={property} set={onChange} uw={uw} />}
       <AcqFinancingSection deal={property} set={onChange} uw={uw} />
       <RefiSection deal={property} set={onChange} uw={uw} />
       <AssumptionsSection deal={property} set={onChange} uw={uw} />
@@ -860,8 +957,7 @@ function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, 
       </div>}
       <MiniNotes deal={deal} set={set} />
       <PricingBasis deal={deal} set={set} m={m} />
-      <IncomeVacancySection deal={deal} set={set} />
-      {window.LineItemsSection && <window.LineItemsSection deal={deal} set={set} uw={uw} onT12Upload={onT12Upload} t12Data={t12Data} />}
+      <IncomeVacancySection deal={deal} set={set} onT12Upload={onT12Upload} t12Data={t12Data} />
       <AcqFinancingSection deal={deal} set={set} uw={uw} />
       <RefiSection deal={deal} set={set} uw={uw} />
       <AssumptionsSection deal={deal} set={set} uw={uw} />
