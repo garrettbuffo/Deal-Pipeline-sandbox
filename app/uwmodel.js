@@ -140,12 +140,14 @@
 
     // ---- Acquisition financing ----
     const fin = deal.acqFin || { mode: 'none' };
-    let acqLoan = null, acqProceeds = 0, acqLabel = 'All cash';
+    const A = window.AltusAssumptions || null;   // firm-wide debt quotes + closing-cost schedule
+    let acqLoan = null, acqProceeds = 0, acqLabel = 'All cash', acqRate = null;
     if (fin.mode === 'new') {
       const n = fin.new || {};
       const basisForLtv = (n.basis === 'LTC') ? basis : price;
       acqProceeds = basisForLtv * (numOr(n.pct, 65) / 100);
-      acqLoan = makeLoan({ principal: acqProceeds, rate: numOr(n.rate, 6), amYears: numOr(n.amYears, 30), ioYears: numOr(n.ioYears, 0) });
+      acqRate = A ? A.resolveRate(n, A.SCENARIO_QUOTE[fin.scenario], 6) : { rate: numOr(n.rate, 6), linked: false, quoteKey: null, quote: null };
+      acqLoan = makeLoan({ principal: acqProceeds, rate: acqRate.rate, amYears: numOr(n.amYears, 30), ioYears: numOr(n.ioYears, 0) });
       acqLabel = 'New ' + (n.basis === 'LTC' ? 'LTC' : 'LTV') + ' loan';
     } else if (fin.mode === 'assumable') {
       const a = fin.assumable || {};
@@ -181,6 +183,8 @@
 
     // ---- Refi sizing (uses refi-year NOI) ----
     let refiLoan = null, refiValue = 0, refiProceeds = 0, refiPayoff = 0, refiCashOut = 0, refiCost = 0;
+    let refiRate = null, refiDSCR = null, refiDebtYield = null;
+    const refiQuoteKey = refi.quote === 'custom' ? null : (refi.quote || 'hudRefi');
     if (refiOn) {
       const refiCap = numOr(refi.cap, 0) / 100;
       const noiR = rows[refiYear].noi;
@@ -189,7 +193,12 @@
       refiPayoff = acqLoan ? acqLoan.balanceAtYearEnd(refiYear) : 0;
       refiCost = refiProceeds * (numOr(refi.costPct, 2) / 100);   // refinance closing cost, out of proceeds
       refiCashOut = refiProceeds - refiPayoff - refiCost;
-      refiLoan = makeLoan({ principal: refiProceeds, rate: numOr(refi.rate, 6), amYears: numOr(refi.amYears, 35), ioYears: numOr(refi.ioYears, 0) });
+      refiRate = A ? A.resolveRate(refi, refiQuoteKey, 6) : { rate: numOr(refi.rate, 6), linked: false, quoteKey: null, quote: null };
+      refiLoan = makeLoan({ principal: refiProceeds, rate: refiRate.rate, amYears: numOr(refi.amYears, 35), ioYears: numOr(refi.ioYears, 0) });
+      // Lender view of the takeout: refi-year NOI against the new loan's first-year payment
+      const refiDS1 = refiLoan.dsForYear(1);
+      refiDSCR = refiDS1 > 0 ? noiR / refiDS1 : null;
+      refiDebtYield = refiProceeds > 0 ? noiR / refiProceeds : null;
     }
 
     // ---- Debt service / balance by year ----
@@ -201,6 +210,12 @@
     function loanBalanceAtYearEnd(y) {
       if (refiOn && y > refiYear) return refiLoan.balanceAtYearEnd(y - refiYear);
       return acqLoan ? acqLoan.balanceAtYearEnd(y) : 0;
+    }
+    // Loan balance outstanding at the START of year y (the debt a lender measures NOI against).
+    function loanBalanceAtYearStart(y) {
+      if (y === 0) return acqProceeds;
+      if (refiOn && y > refiYear) return refiLoan.balanceAtYearEnd(y - refiYear - 1);
+      return acqLoan ? acqLoan.balanceAtYearEnd(y - 1) : 0;
     }
     // Scheduled principal paydown during ownership year y (amortization only — the refi
     // payoff / new origination is a financing event, not amortization, so it's excluded).
@@ -214,7 +229,12 @@
     }
 
     // ---- Equity ----
-    const closingCosts = price * closingPct;
+    const customClosing = deal.closingMode === 'custom' ||
+      (deal.closingMode == null && deal.closingPct != null && deal.closingPct !== '');
+    let closingCosts, closingBreakdown = null;
+    if (customClosing || !A) closingCosts = price * closingPct;
+    else { closingBreakdown = A.closingCosts(price, acqProceeds); closingCosts = closingBreakdown.total; }
+    const closingPctEff = price > 0 ? closingCosts / price : closingPct;
     const initialEquity = price + closingCosts + capex - acqProceeds;
     function equityBalance(y) {
       // capital returned at end of refiYear reduces the invested balance thereafter
@@ -230,6 +250,8 @@
       row.loanBalance = loanBalanceAtYearEnd(y);
       row.yieldOnCost = basis > 0 ? row.noi / basis : 0;
       row.dscr = row.ds > 0 ? row.noi / row.ds : null;
+      const balStart = loanBalanceAtYearStart(y);
+      row.debtYield = balStart > 0 ? row.noi / balStart : null;   // NOI ÷ loan balance
       const eq = equityBalance(y);
       row.cashOnCash = eq > 0 ? row.netIncome / eq : null;
       row.equityBalance = eq;
@@ -279,7 +301,10 @@
 
     return {
       units, price, capex, basis, hold,
-      gprGrowth, opexGrowth, closingPct, sellingPct,
+      gprGrowth, opexGrowth, closingPct: closingPctEff, sellingPct,
+      closingBreakdown, closingCustom: customClosing || !A,
+      acqRate, refiRate, refiQuoteKey, refiDSCR, refiDebtYield,
+      goingInDebtYield: acqProceeds > 0 && rows[1] ? rows[1].noi / acqProceeds : null,
       gpr0, physVac, ltl, badDebt, concessions, otherIncome,
       econLoss0, inPlaceEconVac, egi0,
       stabVac, stabYear,

@@ -1850,7 +1850,8 @@ const NAV = [
 { key: 'brokercalls', label: 'Broker Calls', icon: 'note' },
 { key: 'tasks', label: 'Tasks', icon: 'check' },
 { key: 'crm', label: 'CRM', icon: 'deal' },
-{ key: 'dead', label: 'Dead Deals', icon: 'close' }];
+{ key: 'dead', label: 'Dead Deals', icon: 'close' },
+{ key: 'assumptions', label: 'Assumptions', icon: 'calc' }];
 
 
 // PDFs that render bold text via double-struck glyphs (each character drawn twice)
@@ -2545,6 +2546,14 @@ function AltusApp() {
   const cloudLoaded = useR(false);
   const [cloudReady, setCloudReady] = useS(false); // false until the first cloud reconcile completes (gates the pipeline render)
   const skipNextSave = useR(false);                // set when adopting a cloud read, so it isn't echoed straight back as a save
+  // Firm-wide assumptions (debt quotes, closing-cost schedule) feed every deal's model:
+  // when they change, hand React a fresh deals array so memoized views recompute.
+  // Deal data itself is unchanged, so this is never echoed back as a save.
+  useE(() => {
+    const A = window.AltusAssumptions;
+    if (!A) return undefined;
+    return A.subscribe(() => { skipNextSave.current = true; setDeals((ds) => ds.slice()); });
+  }, []);
   const saveTimer = useR(null);
   const firstPendingSaveAt = useR(null);   // bounds the debounce so continuous typing can't defer a save indefinitely
   const mainRef = useR(null);          // ref to <main> for scroll save/restore
@@ -3458,6 +3467,7 @@ ${text}`;
         view === 'loi' ? <LOIStatusView deals={loiDeals} onOpen={open} onPatch={patch} /> :
         view === 'metrics' ? <MetricsView deals={liveDeals} allDeals={deals} onOpen={open} /> :
         view === 'brokercalls' ? <BrokerCallsView deals={liveDeals} onOpen={open} /> :
+        view === 'assumptions' ? (window.AssumptionsView ? <window.AssumptionsView deals={deals} /> : null) :
         view === 'dead' ? <DeadDealsView deals={deadDeals} onOpen={open} onPatch={patch}
         onBulkPatch={bulkPatch} onBulkDelete={bulkDelete} onReorder={reorderVisible}
         onOM={handleOMUpload} onT12={handleT12Upload} onRR={handleRentRollUpload}

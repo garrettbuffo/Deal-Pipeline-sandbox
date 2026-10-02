@@ -33,6 +33,17 @@ function CAssump({ label, hint, w = 124, children }) {
     </div>
   );
 }
+/* hint under a rate field: linked to a quote on the Assumptions tab, or a one-click relink */
+function RateLinkHint({ r, onRelink }) {
+  if (!r || !r.quote) return null;
+  if (r.linked) return <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Linked · {r.quote.label}</span>;
+  return (
+    <button type="button" onClick={onRelink} title="Follow the current quote on the Assumptions tab"
+      style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 10, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>
+      Custom · use quote ({Number(r.quote.rate).toFixed(2)}%)
+    </button>);
+}
+const assumptionQuotes = () => (window.AltusAssumptions ? window.AltusAssumptions.get().quotes : null);
 function CompactGrid({ children }) {
   return <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 18px', marginTop: 14 }}>{children}</div>;
 }
@@ -240,7 +251,23 @@ function AssumptionsSection({ deal, set, uw }) {
         <CAssump label="OpEx Growth"><FieldInput value={deal.opexGrowth == null ? 2.5 : deal.opexGrowth} onChange={(v) => set('opexGrowth', v)} suffix="%" align="left" /></CAssump>
         <CAssump label="Exit Cap Rate" hint="sale = NOI ÷ cap"><FieldInput value={deal.exitCap == null ? 6 : deal.exitCap} onChange={(v) => set('exitCap', v)} suffix="%" align="left" /></CAssump>
         <CAssump label="Stabilization Yr" hint="reaches target by"><FieldInput value={deal.stabYear == null ? 3 : deal.stabYear} onChange={(v) => set('stabYear', v || 1)} suffix="yr" align="left" /></CAssump>
-        <CAssump label="Acq. Closing Cost" hint="% of price"><FieldInput value={deal.closingPct == null ? 5 : deal.closingPct} onChange={(v) => set('closingPct', v)} suffix="%" align="left" /></CAssump>
+        {uw.closingCustom ? (
+          <CAssump label="Acq. Closing Cost" hint={
+            <button type="button" onClick={() => set({ closingMode: 'standard' })}
+              style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 10, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>
+              Custom % · use standard schedule
+            </button>}>
+            <FieldInput value={deal.closingPct == null ? 5 : deal.closingPct} onChange={(v) => set({ closingPct: v, closingMode: 'custom' })} suffix="%" align="left" />
+          </CAssump>
+        ) : (
+          <CAssump label="Acq. Closing Cost" w={196} hint={<span>Standard schedule · <button type="button" onClick={() => set({ closingMode: 'custom', closingPct: Math.round(uw.closingPct * 1000) / 10 })}
+              style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 10, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>use custom %</button></span>}>
+            <div className="num" title={(uw.closingBreakdown ? uw.closingBreakdown.items : []).map((i) => i.label + ': ' + moneyFull(i.amount) + ' (' + i.note + ')').join('\n')}
+              style={{ height: 34, display: 'flex', alignItems: 'center', gap: 6, padding: '0 10px', border: '1px dashed var(--line-2)', borderRadius: 7, background: 'var(--panel-2)', fontSize: 13.5, color: 'var(--ink)', cursor: 'help' }}>
+              {moneyFull(uw.closingCosts)}<span style={{ color: 'var(--faint)', fontSize: 11.5 }}>{pct1(uw.closingPct)} of price</span>
+            </div>
+          </CAssump>
+        )}
         <CAssump label="Selling Costs" hint="% of sale"><FieldInput value={deal.sellingPct == null ? 4 : deal.sellingPct} onChange={(v) => set('sellingPct', v)} suffix="%" align="left" /></CAssump>
       </CompactGrid>
 
@@ -296,11 +323,16 @@ function AcqFinancingSection({ deal, set, uw }) {
 
   // Financing scenario presets. Each sets the new-loan terms; "Bridge to HUD" also
   // turns on and configures the HUD takeout refinance.
+  // Terms come from the current quotes on the Assumptions tab; the rate stays linked so a
+  // quote change there flows to this deal.
+  const Q = assumptionQuotes();
+  const qLoan = (k, fb) => (Q && Q[k]) ? { basis: Q[k].basis, pct: Q[k].maxLev, rate: Q[k].rate, amYears: Q[k].amYears, ioYears: Q[k].ioYears, rateMode: 'linked' } : fb;
+  const hudRefi = (Q && Q.hudRefi) || { maxLev: 80, rate: 6, amYears: 35, ioYears: 0 };
   const SCENARIOS = {
-    'Bridge to HUD':     { loan: { basis: 'LTC', pct: 70, rate: 6.25, amYears: 30, ioYears: 3 },
-                           refi: { enabled: true, year: 3, cap: 6, ltv: 80, rate: 6, amYears: 35, ioYears: 0, costPct: 2 } },
-    'HUD at Acquisition':    { loan: { basis: 'LTV', pct: 85, rate: 5.75, amYears: 35, ioYears: 0 } },
-    'Agency at Acquisition': { loan: { basis: 'LTV', pct: 70, rate: 5.5, amYears: 30, ioYears: 2 } },
+    'Bridge to HUD':     { loan: qLoan('bridge', { basis: 'LTC', pct: 70, rate: 6.25, amYears: 30, ioYears: 3 }),
+                           refi: { enabled: true, year: 3, cap: 6, ltv: hudRefi.maxLev, rate: hudRefi.rate, amYears: hudRefi.amYears, ioYears: hudRefi.ioYears, costPct: 2, quote: 'hudRefi', rateMode: 'linked' } },
+    'HUD at Acquisition':    { loan: qLoan('hudAcq', { basis: 'LTV', pct: 85, rate: 5.75, amYears: 35, ioYears: 0 }) },
+    'Agency at Acquisition': { loan: qLoan('agencyAcq', { basis: 'LTV', pct: 70, rate: 5.5, amYears: 30, ioYears: 2 }) },
     'Custom':            null,
   };
   const applyScenario = (label) => {
@@ -331,7 +363,8 @@ function AcqFinancingSection({ deal, set, uw }) {
             {Object.keys(SCENARIOS).map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <span style={{ fontSize: 11.5, color: 'var(--faint)' }}>
-            {fin.scenario === 'Bridge to HUD' ? 'sets bridge loan + HUD takeout refi' : 'preset terms — adjust any field below'}
+            {fin.scenario === 'Bridge to HUD' ? 'bridge loan + HUD takeout refi · rates from the Assumptions tab'
+              : fin.scenario && fin.scenario !== 'Custom' ? 'rate follows the Assumptions tab · other terms adjustable' : 'enter your own terms'}
           </span>
         </div>
         <CompactGrid>
@@ -339,7 +372,10 @@ function AcqFinancingSection({ deal, set, uw }) {
             <Seg size="sm" value={n.basis === 'LTC' ? 'LTC' : 'LTV'} options={['LTV', 'LTC']} onChange={(v) => setNew('basis', v)} />
           </CAssump>
           <CAssump label={n.basis === 'LTC' ? 'Loan to Cost' : 'Loan to Value'}><FieldInput value={n.pct == null ? 65 : n.pct} onChange={(v) => setNew('pct', v)} suffix="%" align="left" /></CAssump>
-          <CAssump label="Interest Rate"><FieldInput value={n.rate == null ? 6 : n.rate} onChange={(v) => setNew('rate', v)} suffix="%" align="left" /></CAssump>
+          <CAssump label="Interest Rate" w={150} hint={<RateLinkHint r={uw.acqRate} onRelink={() => setNew('rateMode', 'linked')} />}>
+            <FieldInput value={uw.acqRate ? uw.acqRate.rate : (n.rate == null ? 6 : n.rate)}
+              onChange={(v) => set('acqFin', { ...fin, new: { ...n, rate: v, rateMode: 'custom' } })} suffix="%" align="left" />
+          </CAssump>
           <CAssump label="Amortization"><FieldInput value={n.amYears == null ? 30 : n.amYears} onChange={(v) => setNew('amYears', v)} suffix="yrs" align="left" /></CAssump>
           <CAssump label="Interest-Only"><FieldInput value={n.ioYears == null ? 0 : n.ioYears} onChange={(v) => setNew('ioYears', v)} suffix="yrs" align="left" /></CAssump>
         </CompactGrid>
@@ -363,17 +399,29 @@ function AcqFinancingSection({ deal, set, uw }) {
 function FinFooter({ uw, goingInDSCR, assumed }) {
   const ds1 = uw.acqLoan ? uw.acqLoan.dsForYear(1) : 0;
   const ltv = uw.price > 0 ? uw.acqProceeds / uw.price : null;
+  const q = uw.acqRate && uw.acqRate.quote;
+  const minD = q && q.minDscr ? Number(q.minDscr) : null;
+  const low = goingInDSCR != null && goingInDSCR < (minD || 1.2);
+  const dy = uw.goingInDebtYield;
   return (
-    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gridTemplateColumns: assumed ? 'repeat(5,1fr)' : 'repeat(4,1fr)', gap: 12 }}>
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 12 }}>
       <FootStat label={assumed ? 'Assumed Balance' : 'Loan Proceeds'} value={moneyFull(uw.acqProceeds)} accent="var(--accent)" />
       {assumed && <FootStat label="LTV" value={ltv == null ? '—' : (ltv * 100).toFixed(1) + '%'} />}
       <FootStat label="Annual Debt Service" value={moneyFull(ds1)} />
       <FootStat label="Equity Required" value={moneyFull(uw.initialEquity)} sub="incl. closing + capex" />
-      <FootStat label="Going-In DSCR" value={goingInDSCR == null ? '—' : goingInDSCR.toFixed(2) + 'x'} accent={goingInDSCR != null && goingInDSCR < 1.2 ? 'var(--neg)' : 'var(--pos)'} />
+      <FootStat tone="lender" label="Going-In DSCR" value={goingInDSCR == null ? '—' : goingInDSCR.toFixed(2) + 'x'}
+        accent={low ? 'var(--neg)' : 'var(--lender)'} sub={minD ? (low ? 'below ' : 'lender min ') + minD.toFixed(2) + 'x' : 'Yr 1 NOI ÷ DS'} />
+      <FootStat tone="lender" label="Going-In Debt Yield" value={dy == null ? '—' : pct1(dy)} accent="var(--lender)" sub="Yr 1 NOI ÷ loan" />
     </div>
   );
 }
-function FootStat({ label, value, sub, accent }) {
+function FootStat({ label, value, sub, accent, tone }) {
+  if (tone === 'lender') return (
+    <div style={{ background: 'var(--lender-soft)', borderRadius: 7, padding: '7px 10px', margin: '-7px 0' }}>
+      <div style={{ fontSize: 10, color: 'var(--lender)', fontWeight: 700, letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      <div className="num" style={{ fontSize: 16, fontWeight: 700, color: accent || 'var(--lender)' }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: 'var(--lender)', opacity: .8, marginTop: 2 }}>{sub}</div>}
+    </div>);
   return (
     <div>
       <div style={{ fontSize: 10, color: 'var(--muted)', fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
@@ -388,10 +436,22 @@ function RefiSection({ deal, set, uw }) {
   const refi = deal.refi || { enabled: false };
   const on = !!refi.enabled;
   const setRefi = (k, v) => set('refi', { ...refi, [k]: v });
+  const Q = assumptionQuotes();
+  const QUOTE_OPTS = [['hudRefi', 'HUD takeout'], ['agencyRefi', 'Agency takeout'], ['custom', 'Custom']];
+  const quoteKey = refi.quote || 'hudRefi';
+  const applyQuote = (k) => {
+    if (k === 'custom' || !Q || !Q[k]) { set('refi', { ...refi, quote: 'custom', rate: uw.refiRate ? uw.refiRate.rate : refi.rate, rateMode: 'custom' }); return; }
+    const q = Q[k];
+    set('refi', { ...refi, quote: k, ltv: q.maxLev, amYears: q.amYears, ioYears: q.ioYears, rateMode: 'linked' });
+  };
   const toggle = (label) => {
-    if (label === 'Yes') set('refi', { enabled: true, year: refi.year || 3, cap: refi.cap || 6.0, ltv: refi.ltv || 80, rate: refi.rate || 6.0, amYears: refi.amYears || 35, ioYears: refi.ioYears || 0 });
+    const q = (Q && Q.hudRefi) || { maxLev: 80, rate: 6, amYears: 35, ioYears: 0 };
+    if (label === 'Yes') set('refi', { enabled: true, year: refi.year || 3, cap: refi.cap || 6.0, ltv: refi.ltv || q.maxLev, rate: refi.rate || q.rate, amYears: refi.amYears || q.amYears, ioYears: refi.ioYears || q.ioYears, quote: refi.quote || 'hudRefi', rateMode: refi.rateMode || 'linked' });
     else set('refi', { ...refi, enabled: false });
   };
+  const rq = uw.refiRate && uw.refiRate.quote;
+  const refiMinD = rq && rq.minDscr ? Number(rq.minDscr) : null;
+  const refiLow = uw.refiDSCR != null && uw.refiDSCR < (refiMinD || 1.2);
   return (
     <Card>
       <SectionHead icon="target" title="Refinance" desc="Cash-out refi during the hold. Value = refi-year NOI ÷ refi cap; proceeds repay the old loan."
@@ -401,21 +461,35 @@ function RefiSection({ deal, set, uw }) {
           No refinance — acquisition loan carried through to sale.
         </div>
       ) : (<>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 12, marginBottom: 4 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: 'var(--muted)', flex: 'none' }}>Takeout Debt</span>
+          <select value={quoteKey} onChange={(e) => applyQuote(e.target.value)}
+            style={{ border: '1px solid var(--line-2)', borderRadius: 7, padding: '6px 10px', background: 'var(--panel)',
+              fontSize: 12.5, fontWeight: 600, color: 'var(--accent)', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+            {QUOTE_OPTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select>
+          <span style={{ fontSize: 11.5, color: 'var(--faint)' }}>{quoteKey === 'custom' ? 'enter your own terms' : 'rate follows the Assumptions tab · other terms adjustable'}</span>
+        </div>
         <CompactGrid>
           <CAssump label="Refi Year"><FieldInput value={refi.year == null ? 3 : refi.year} onChange={(v) => setRefi('year', v || 1)} suffix="yr" align="left" /></CAssump>
           <CAssump label="Refi Cap Rate"><FieldInput value={refi.cap} onChange={(v) => setRefi('cap', v)} suffix="%" align="left" /></CAssump>
-          <CAssump label="Refi LTV" hint="HUD — adjustable"><FieldInput value={refi.ltv == null ? 80 : refi.ltv} onChange={(v) => setRefi('ltv', v)} suffix="%" align="left" /></CAssump>
-          <CAssump label="Interest Rate"><FieldInput value={refi.rate == null ? 6 : refi.rate} onChange={(v) => setRefi('rate', v)} suffix="%" align="left" /></CAssump>
-          <CAssump label="Amortization" hint="HUD — adjustable"><FieldInput value={refi.amYears == null ? 35 : refi.amYears} onChange={(v) => setRefi('amYears', v)} suffix="yrs" align="left" /></CAssump>
+          <CAssump label="Refi LTV" hint={rq ? 'quote max ' + rq.maxLev + '%' : null}><FieldInput value={refi.ltv == null ? 80 : refi.ltv} onChange={(v) => setRefi('ltv', v)} suffix="%" align="left" /></CAssump>
+          <CAssump label="Interest Rate" w={150} hint={<RateLinkHint r={uw.refiRate} onRelink={() => setRefi('rateMode', 'linked')} />}>
+            <FieldInput value={uw.refiRate ? uw.refiRate.rate : (refi.rate == null ? 6 : refi.rate)} onChange={(v) => set('refi', { ...refi, rate: v, rateMode: 'custom' })} suffix="%" align="left" />
+          </CAssump>
+          <CAssump label="Amortization"><FieldInput value={refi.amYears == null ? 35 : refi.amYears} onChange={(v) => setRefi('amYears', v)} suffix="yrs" align="left" /></CAssump>
           <CAssump label="Interest-Only"><FieldInput value={refi.ioYears == null ? 0 : refi.ioYears} onChange={(v) => setRefi('ioYears', v)} suffix="yrs" align="left" /></CAssump>
           <CAssump label="Refi Cost" hint="% of new loan"><FieldInput value={refi.costPct == null ? 2 : refi.costPct} onChange={(v) => setRefi('costPct', v)} suffix="%" align="left" /></CAssump>
         </CompactGrid>
-        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 12 }}>
           <FootStat label={'Refi Value (Yr ' + uw.refiYear + ')'} value={moneyFull(uw.refiValue)} sub="NOI ÷ refi cap" />
           <FootStat label="New Loan" value={moneyFull(uw.refiProceeds)} accent="var(--accent)" />
           <FootStat label="Old Loan Payoff" value={moneyFull(uw.refiPayoff)} />
           <FootStat label="Refi Cost" value={moneyFull(uw.refiCost)} sub={(refi.costPct == null ? 2 : refi.costPct) + '% of loan'} />
           <FootStat label="Cash-Out to Equity" value={moneyFull(uw.refiCashOut)} accent={uw.refiCashOut >= 0 ? 'var(--pos)' : 'var(--neg)'} />
+          <FootStat tone="lender" label="Refi DSCR" value={uw.refiDSCR == null ? '—' : uw.refiDSCR.toFixed(2) + 'x'} accent={refiLow ? 'var(--neg)' : 'var(--lender)'}
+            sub={refiMinD ? (refiLow ? 'below ' : 'lender min ') + refiMinD.toFixed(2) + 'x' : 'refi-yr NOI ÷ new DS'} />
+          <FootStat tone="lender" label="Refi Debt Yield" value={uw.refiDebtYield == null ? '—' : pct1(uw.refiDebtYield)} accent="var(--lender)" sub="refi-yr NOI ÷ new loan" />
         </div>
       </>)}
     </Card>
@@ -428,19 +502,26 @@ function CashFlowTable({ uw, showReturns = true }) {
   const colW = 116, labelW = 200;
   const grid = `${labelW}px repeat(${cols.length}, minmax(${colW}px, 1fr))`;
   const headLabel = (y) => y === 0 ? 'Acq Year' : 'Year ' + y;
-  const Row = ({ label, hint, get, fmt, strong, accent, neg, top }) => (
-    <div style={{ display: 'grid', gridTemplateColumns: grid, alignItems: 'center', borderTop: top ? '1px solid var(--line-2)' : '1px solid var(--line)' }}>
-      <div style={{ padding: '9px 14px', position: 'sticky', left: 0, background: 'var(--panel)', zIndex: 1 }}>
-        <div style={{ fontSize: 12.5, fontWeight: strong ? 600 : 400, color: 'var(--ink)' }}>{label}</div>
-        {hint && <div style={{ fontSize: 10.5, color: 'var(--faint)' }}>{hint}</div>}
+  // tone 'lender' = lender metrics (debt yield, DSCR): warm shading sets them apart from equity yields
+  const Row = ({ label, hint, get, fmt, strong, accent, neg, top, tone }) => {
+    const lender = tone === 'lender';
+    return (
+    <div style={{ display: 'grid', gridTemplateColumns: grid, alignItems: lender ? 'stretch' : 'center', background: lender ? 'var(--lender-soft)' : undefined, borderTop: top ? '1px solid var(--line-2)' : '1px solid var(--line)' }}>
+      <div style={{ padding: '9px 14px', position: 'sticky', left: 0, background: lender ? 'var(--lender-soft)' : 'var(--panel)', zIndex: 1, boxShadow: lender ? 'inset 3px 0 0 var(--lender)' : 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: strong || lender ? 600 : 400, color: lender ? 'var(--lender)' : 'var(--ink)' }}>
+          {label}
+          {lender && <span style={{ fontSize: 8.5, fontWeight: 700, letterSpacing: '.07em', padding: '1px 5px', borderRadius: 4, background: 'var(--panel)', color: 'var(--lender)' }}>LENDER</span>}
+        </div>
+        {hint && <div style={{ fontSize: 10.5, color: lender ? 'var(--lender)' : 'var(--faint)', opacity: lender ? .75 : 1 }}>{hint}</div>}
       </div>
       {cols.map((r) => {
         const v = get(r); const txt = fmt(v, r);
         const isNeg = neg && typeof v === 'number' && v < 0;
-        return <div key={r.year} className="num" style={{ padding: '9px 14px', textAlign: 'right', fontSize: strong ? 13.5 : 12.5, fontWeight: strong ? 700 : 500, color: isNeg ? 'var(--neg)' : (accent || (strong ? 'var(--ink)' : 'var(--slate)')), background: r.year === 0 ? 'var(--panel-2)' : 'transparent' }}>{txt}</div>;
+        return <div key={r.year} className="num" style={{ padding: '9px 14px', textAlign: 'right', fontSize: strong ? 13.5 : 12.5, fontWeight: strong || lender ? 700 : 500, color: isNeg ? 'var(--neg)' : (accent || (lender ? 'var(--lender)' : strong ? 'var(--ink)' : 'var(--slate)')), background: lender ? 'transparent' : r.year === 0 ? 'var(--panel-2)' : 'transparent', display: lender ? 'flex' : undefined, alignItems: 'center', justifyContent: 'flex-end' }}>{txt}</div>;
       })}
     </div>
-  );
+    );
+  };
   return (
     <Card pad={false}>
       <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -466,8 +547,9 @@ function CashFlowTable({ uw, showReturns = true }) {
           <Row label="Net Sale Proceeds" hint={'at exit, year ' + uw.hold} get={(r) => r.saleProceeds} fmt={(v) => (v ? moneyFull(v) : '—')} accent="var(--navy)" />
           <Row label="Total Cash Flow to Equity" hint="net CF + refi ROC + sale" get={(r) => r.totalCashFlow} fmt={moneyFull} strong accent="var(--pos)" neg />
           <Row top label="Net Revenue Growth" hint="YoY EGI Δ · rent growth + vacancy" get={(r) => r.netRevGrowth} fmt={(v) => (v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(1) + '%')} />
-          <Row label="Yield on Cost" hint="NOI ÷ total basis" get={(r) => r.yieldOnCost} fmt={pct1} />
-          <Row label="DSCR" hint="NOI ÷ debt service" get={(r) => r.dscr} fmt={(v) => (v == null ? '—' : v.toFixed(2) + 'x')} />
+          <Row top tone="lender" label="Debt Yield" hint="NOI ÷ loan balance" get={(r) => r.debtYield} fmt={(v) => (v == null ? '—' : pct1(v))} />
+          <Row tone="lender" label="DSCR" hint="NOI ÷ debt service" get={(r) => r.dscr} fmt={(v) => (v == null ? '—' : v.toFixed(2) + 'x')} />
+          <Row top label="Yield on Cost" hint="NOI ÷ total basis" get={(r) => r.yieldOnCost} fmt={pct1} />
           <Row label="Cash-on-Cash Yield" hint="net CF ÷ equity balance" get={(r) => r.cashOnCash} fmt={(v) => (v == null ? '—' : pct1(v))} />
           <Row label="Principal Paydown" hint="amortization ÷ equity balance" get={(r) => r.principalPaydownPct} fmt={(v) => (v == null || v === 0 ? '—' : pct1(v))} />
           <Row label="Yield + Principal Paydown" hint="cash yield + paydown" get={(r) => r.yieldPlusPaydown} fmt={(v) => (v == null ? '—' : pct1(v))} strong accent="var(--pos)" />
