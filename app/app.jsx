@@ -2716,6 +2716,15 @@ function AltusApp() {
     return () => { active = false; };
   }, [session]);
 
+  // Shared firm-wide Assumptions and the Network activity timeline live in their own small
+  // Supabase tables (settings, activities); connect once signed in.
+  useE(() => {
+    if (!cloud.enabled) return;
+    if (cloud.requireLogin && !session) return;
+    if (window.AltusAssumptions && window.AltusAssumptions.connect) window.AltusAssumptions.connect(cloud);
+    if (window.AltusActivities && window.AltusActivities.connect) window.AltusActivities.connect(cloud);
+  }, [session]);
+
   // Load contacts from cloud once authenticated (same safe-merge approach as deals).
   useE(() => {
     if (!cloud.enabled) return;

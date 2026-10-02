@@ -23,8 +23,8 @@ const LOI_PLUS = ['LOI Submitted', 'LOI Lost', 'Under Contract', 'Purchased'];
 const typeMeta = (k) => NET_TYPES.find((t) => t.key === k) || null;
 
 /* ── Activity store ──
-   Touches not tied to a deal's call log. Sandbox: this browser's localStorage. At go-live this
-   moves to a Supabase activities table so the team shares one timeline. */
+   Touches not tied to a deal's call log, shared through the Supabase "activities" table once
+   signed in (localStorage only in the sandbox / offline). */
 const LS_ACT = 'altus_activities_v1';
 const AltusActivities = (function () {
   let list = null;
@@ -43,10 +43,40 @@ const AltusActivities = (function () {
     return list;
   }
   function save() { try { localStorage.setItem(LS_ACT, JSON.stringify(list)); } catch (e) {} subs.forEach((f) => { try { f(list); } catch (e) {} }); }
+  const byTs = (a, b) => String(b.ts || '').localeCompare(String(a.ts || ''));
+  // Live: the Supabase "activities" table (one row per touch) is the shared timeline; this
+  // browser's copy is a cache. On first connect, touches only in this browser (e.g. calls from
+  // the old Broker Calls tab) are uploaded so nothing is lost.
+  let cloud = null;
+  async function connect(c) {
+    if (!c || cloud) return;
+    cloud = c;
+    try {
+      const rows = await c.listRows('activities');
+      if (rows) {
+        const remote = rows.map((r) => ({ ...(r.data || {}), id: r.id }));
+        const ids = new Set(remote.map((a) => a.id));
+        const localOnly = load().filter((a) => a && a.id && !ids.has(a.id));
+        localOnly.forEach((a) => c.putRow('activities', a.id, a).catch((e) => console.warn('[activities] upload failed', e)));
+        list = [...remote, ...localOnly].sort(byTs);
+        save();
+      }
+    } catch (e) { console.warn('[activities] cloud load failed, using local', e); }
+    c.subscribeTable('activities', (payload) => {
+      const ev = payload && payload.eventType;
+      if (ev === 'DELETE') { const id = payload.old && payload.old.id; if (id) { list = load().filter((a) => a.id !== id); save(); } return; }
+      const r = payload && payload.new;
+      if (!r || !r.id) return;
+      const a = { ...(r.data || {}), id: r.id };
+      list = [a, ...load().filter((x) => x.id !== a.id)].sort(byTs);
+      save();
+    });
+  }
   return {
     all: load,
-    add(a) { list = [a, ...load()]; save(); },
-    remove(id) { list = load().filter((a) => a.id !== id); save(); },
+    connect,
+    add(a) { list = [a, ...load()]; save(); if (cloud) cloud.putRow('activities', a.id, a).catch((e) => console.warn('[activities] save failed', e)); },
+    remove(id) { list = load().filter((a) => a.id !== id); save(); if (cloud) cloud.deleteRow('activities', id).catch((e) => console.warn('[activities] delete failed', e)); },
     subscribe(f) { subs.add(f); return () => subs.delete(f); },
   };
 })();

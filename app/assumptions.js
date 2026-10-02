@@ -73,9 +73,42 @@
   function get() { return state; }
   function set(next) {
     state = merge({ ...(typeof next === 'function' ? next(state) : next), updatedAt: new Date().toISOString() });
+    persist(); notify(); pushCloud();
+  }
+  function reset() { state = merge(null); persist(); notify(); pushCloud(); }
+
+  // ── Shared copy on Supabase (settings row "assumptions") so the whole team edits one set. ──
+  let cloud = null, pushTimer = null, lastCloudJson = null;
+  function pushCloud() {
+    if (!cloud) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      const json = JSON.stringify(state);
+      if (json === lastCloudJson) return;
+      lastCloudJson = json;
+      cloud.putRow('settings', 'assumptions', state).catch((e) => console.warn('[assumptions] cloud save failed', e));
+    }, 500);
+  }
+  function applyRemote(data) {
+    if (!data || typeof data !== 'object') return;
+    const json = JSON.stringify(merge(data));
+    if (json === JSON.stringify(state)) { lastCloudJson = json; return; }
+    state = merge(data); lastCloudJson = JSON.stringify(state);
     persist(); notify();
   }
-  function reset() { state = merge(null); persist(); notify(); }
+  async function connect(c) {
+    if (!c || cloud) return;
+    cloud = c;
+    try {
+      const row = await c.getRow('settings', 'assumptions');
+      if (row && row.data) applyRemote(row.data);
+      else { lastCloudJson = null; pushCloud(); }   // first time: publish the current set
+    } catch (e) { console.warn('[assumptions] cloud load failed, using local', e); }
+    c.subscribeTable('settings', (payload) => {
+      const r = payload && payload.new;
+      if (r && r.id === 'assumptions') applyRemote(r.data);
+    });
+  }
   function subscribe(fn) { subs.add(fn); return () => subs.delete(fn); }
 
   const n = (v) => (v == null || v === '' || isNaN(Number(v)) ? 0 : Number(v));
@@ -196,6 +229,6 @@
     return { ...d, uwAssumptions: snap, ...(Array.isArray(d.properties) ? { properties: d.properties.map((p) => ({ ...p, uwAssumptions: snap })) } : {}) };
   }
 
-  window.AltusAssumptions = { DEFAULTS, SCENARIO_QUOTE, get, set, reset, subscribe, acqFee: live.acqFee, closingCosts: live.closingCosts, resolveRate: live.resolveRate,
+  window.AltusAssumptions = { DEFAULTS, SCENARIO_QUOTE, get, set, reset, subscribe, connect, acqFee: live.acqFee, closingCosts: live.closingCosts, resolveRate: live.resolveRate,
     acqLoanFeePct: live.acqLoanFeePct, refiCostPct: live.refiCostPct, forDeal, snapshot, isStale, withSnapshot, refreshSnapshot };
 })();

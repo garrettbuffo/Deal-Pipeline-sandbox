@@ -25,7 +25,9 @@ window.ALTUS_AI = {
     // rolls routinely take well past 4s. Give real parsing the time it actually needs.
     const hasFallback = window.claude && typeof window.claude.complete === 'function';
     const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), hasFallback ? 4000 : 60000);
+    // Large reads (T-12 line items, a PDF rent roll unit list) return many thousands of tokens,
+    // so they get up to 5 minutes; ordinary parses keep the 60s cap.
+    const tid = setTimeout(() => controller.abort(), hasFallback ? 4000 : (maxTokens && maxTokens > 4096 ? 300000 : 60000));
     let r;
     try {
       r = await fetch('/api/claude', {

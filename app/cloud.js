@@ -327,12 +327,39 @@
     return () => { client.removeChannel(channel); };
   }
 
+  // ---- Simple row access for the small shared tables (settings, activities) ----
+  // Same shape as the other tables: { id text, data jsonb, updated_at }. These never touch
+  // the deals / contacts / todos sync above.
+  async function listRows(table) {
+    if (!client) return null;
+    const { data, error } = await client.from(table).select('id,data,updated_at');
+    if (error) throw error;
+    return data || [];
+  }
+  async function getRow(table, id) {
+    if (!client) return null;
+    const { data, error } = await client.from(table).select('id,data,updated_at').eq('id', id).maybeSingle();
+    if (error) throw error;
+    return data || null;
+  }
+  async function putRow(table, id, payload) {
+    if (!client) return;
+    const { error } = await client.from(table).upsert({ id, data: payload, updated_at: new Date().toISOString() });
+    if (error) throw error;
+  }
+  async function deleteRow(table, id) {
+    if (!client) return;
+    const { error } = await client.from(table).delete().eq('id', id);
+    if (error) throw error;
+  }
+
   window.AltusCloud = {
     enabled, requireLogin, client, getSession, signIn, signOut, onAuthChange, currentEmail,
     loadDeals, saveDeals, deleteCloudDeals, reconcileDeals,
     loadContacts, saveContacts, deleteCloudContacts, reconcileContacts,
     loadTodos, saveTodos, deleteCloudTodos, reconcileTodos,
     uploadDoc, signedDocUrl, deleteDoc, subscribeTable,
+    listRows, getRow, putRow, deleteRow,
   };
   if (enabled) console.info('[AltusCloud] connected to', cfg.SUPABASE_URL);
 })();
