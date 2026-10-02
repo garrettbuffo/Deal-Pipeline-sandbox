@@ -148,6 +148,16 @@ function PanelHead({ children, accent }) {
   );
 }
 
+// Read-only figure shown in place of an input when the line-item detail panel drives it.
+function LinkedFigure({ value }) {
+  return (
+    <div title="Set by the line-item detail below" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, height: 32,
+      padding: '0 10px', borderRadius: 7, border: '1px dashed var(--line-2)', background: 'var(--panel-3)' }}>
+      <Icon name="lock" size={11} style={{ color: 'var(--faint)' }} />
+      <span className="num" style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{value}</span>
+    </div>);
+}
+
 function IncomeVacancySection({ deal, set }) {
   const units = deal.units || 1;
   const gpr = num(deal.gprAnnual);
@@ -161,10 +171,16 @@ function IncomeVacancySection({ deal, set }) {
   const inPlaceNOI = inPlaceEGI - curOpex;
 
   const stabVac = (deal.stabEconVac == null || deal.stabEconVac === '') ? inPlaceVac : num(deal.stabEconVac) / 100;
-  const stabOther = (deal.stabOtherIncome == null || deal.stabOtherIncome === '') ? other : num(deal.stabOtherIncome);
+  const uo = deal.uwOtherIncome && deal.uwOtherIncome.mode === 'lines' ? deal.uwOtherIncome : null;
+  const otherLines = !!uo;
+  const opexLines = !!(deal.uwOpex && deal.uwOpex.mode === 'lines');
+  const stabOther = uo ? units * 12 * (num(uo.rubsPUPM) * num(uo.rubsPct == null ? 100 : uo.rubsPct) / 100 + num(uo.otherPUPM))
+    : (deal.stabOtherIncome == null || deal.stabOtherIncome === '') ? other : num(deal.stabOtherIncome);
   const stabEGI = gpr * (1 - stabVac) + stabOther;
-  const stabOpexPerUnit = num(deal.marketOpexPerUnit);
-  const stabOpex = stabOpexPerUnit * units;
+  const ux = opexLines ? deal.uwOpex : null;
+  const stabOpex = ux ? Object.keys(ux.lines || {}).reduce((s, k) => s + num(ux.lines[k]), 0) + num(ux.mgmtPct) / 100 * stabEGI
+    : num(deal.marketOpexPerUnit) * units;
+  const stabOpexPerUnit = ux ? stabOpex / units : num(deal.marketOpexPerUnit);
   const stabNOI = stabEGI - stabOpex;
   const rpu = gpr > 0 ? gpr / units / 12 : 0;
   const setComb = (v) => set({ concessions: v, badDebt: 0 });
@@ -236,17 +252,21 @@ function IncomeVacancySection({ deal, set }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '6px 0' }}>
             <div>
               <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>Other Income</span>
-              <Note>{stabOther && units ? moneyFull(stabOther / units / 12) + ' / unit / mo · carries trailing' : 'carries trailing'}</Note>
+              <Note>{otherLines ? moneyFull(stabOther / units / 12) + ' / unit / mo · RUBS + other from detail below' : stabOther && units ? moneyFull(stabOther / units / 12) + ' / unit / mo · carries trailing' : 'carries trailing'}</Note>
             </div>
-            <FieldInput value={deal.stabOtherIncome} onChange={(v) => set('stabOtherIncome', v)} prefix="$" placeholder={String(Math.round(other))} />
+            {otherLines
+              ? <LinkedFigure value={moneyFull(stabOther)} />
+              : <FieldInput value={deal.stabOtherIncome} onChange={(v) => set('stabOtherIncome', v)} prefix="$" placeholder={String(Math.round(other))} />}
           </div>
           <OutRow label="Stabilized Effective Gross Income" value={moneyFull(stabEGI)} strong accent="var(--accent)" />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 116px', gap: 8, alignItems: 'center', padding: '8px 0 6px' }}>
             <div>
               <span style={{ fontSize: 12.5, color: 'var(--ink)' }}>OpEx / Unit</span>
-              <Note>{stabOpex ? moneyFull(stabOpex) + ' total' : '—'}</Note>
+              <Note>{opexLines ? moneyFull(stabOpex) + ' total · sum of line items below' : stabOpex ? moneyFull(stabOpex) + ' total' : '—'}</Note>
             </div>
-            <FieldInput value={deal.marketOpexPerUnit} onChange={(v) => set('marketOpexPerUnit', v || 0)} prefix="$" />
+            {opexLines
+              ? <LinkedFigure value={moneyFull(stabOpexPerUnit)} />
+              : <FieldInput value={deal.marketOpexPerUnit} onChange={(v) => set('marketOpexPerUnit', v || 0)} prefix="$" />}
           </div>
           <OutRow label="Stabilized NOI" value={moneyFull(stabNOI)} strong accent="var(--pos)" />
         </div>
@@ -730,6 +750,7 @@ function PropertyFullUW({ property, onChange }) {
       </Card>
       <PricingBasis deal={property} set={onChange} m={m} />
       <IncomeVacancySection deal={property} set={onChange} />
+      {window.LineItemsSection && <window.LineItemsSection deal={property} set={onChange} uw={uw} />}
       <AcqFinancingSection deal={property} set={onChange} uw={uw} />
       <RefiSection deal={property} set={onChange} uw={uw} />
       <AssumptionsSection deal={property} set={onChange} uw={uw} />
@@ -823,7 +844,7 @@ function PortfolioUWTab({ deal, set, view, setView, setProperties, excluded = {}
   );
 }
 
-function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, excluded, setExcluded, stickyTop }) {
+function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, excluded, setExcluded, stickyTop, onT12Upload, t12Data }) {
   const isPortfolio = !!deal.isPortfolio && Array.isArray(deal.properties) && deal.properties.length > 1;
   if (isPortfolio) return <PortfolioUWTab deal={deal} set={set} view={propView} setView={setPropView} setProperties={setProperties} excluded={excluded} setExcluded={setExcluded} stickyTop={stickyTop} />;
   const m = computeMetrics(deal);
@@ -840,6 +861,7 @@ function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, 
       <MiniNotes deal={deal} set={set} />
       <PricingBasis deal={deal} set={set} m={m} />
       <IncomeVacancySection deal={deal} set={set} />
+      {window.LineItemsSection && <window.LineItemsSection deal={deal} set={set} uw={uw} onT12Upload={onT12Upload} t12Data={t12Data} />}
       <AcqFinancingSection deal={deal} set={set} uw={uw} />
       <RefiSection deal={deal} set={set} uw={uw} />
       <AssumptionsSection deal={deal} set={set} uw={uw} />

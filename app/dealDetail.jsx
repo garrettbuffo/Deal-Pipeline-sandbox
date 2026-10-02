@@ -694,6 +694,7 @@ function DetailTabs({ tab, setTab, showProperties }) {
   { key: 'summary', label: 'Summary', icon: 'deal' },
   ...(showProperties ? [{ key: 'properties', label: 'Properties', icon: 'bank' }] : []),
   { key: 'fulluw', label: 'Full UW', icon: 'calc' },
+  ...(window.RentRollTab ? [{ key: 'rentroll', label: 'Rent Roll', icon: 'table' }] : []),
   { key: 'returns', label: 'Returns', icon: 'chart' },
   { key: 'location', label: 'Location', icon: 'search' },
   { key: 'notes', label: 'Notes', icon: 'note' }];
@@ -1336,7 +1337,10 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
         }
 
         {/* ===== FULL UNDERWRITING ===== */}
-        {tab === 'fulluw' && window.FullUnderwritingTab && <window.FullUnderwritingTab deal={deal} set={set} propView={propView} setPropView={setPropView} setProperties={(arr) => patch(rollupProperties(arr))} excluded={excluded} setExcluded={setExcluded} stickyTop={sticky ? 44 : 0} />}
+        {tab === 'fulluw' && window.FullUnderwritingTab && <window.FullUnderwritingTab deal={deal} set={set} propView={propView} setPropView={setPropView} setProperties={(arr) => patch(rollupProperties(arr))} excluded={excluded} setExcluded={setExcluded} stickyTop={sticky ? 44 : 0} onT12Upload={onT12Upload} t12Data={t12Data} />}
+
+        {/* ===== RENT ROLL MATRIX ===== */}
+        {tab === 'rentroll' && window.RentRollTab && <window.RentRollTab deal={deal} set={set} onRRUpload={onRRUpload} rrData={rrData} />}
 
         {/* ===== RETURN METRICS ===== */}
         {tab === 'returns' && window.ReturnsTab && <window.ReturnsTab deal={deal} set={set} />}

@@ -138,21 +138,30 @@
 
     // ---- OpEx base (UW assumption × units) ----
     const opexBase = numOr(deal.marketOpexPerUnit, 0) * units || numOr(deal.currentOpexTotal, 0);
+    // Line-item OpEx (Full UW detail panel), as in the Altus Excel template: each fixed line
+    // grows at OpEx growth and management is a % of each year's EGI.
+    const ux = deal.uwOpex && deal.uwOpex.mode === 'lines' ? deal.uwOpex : null;
+    const opexFixedLines = ux ? Object.keys(ux.lines || {}).reduce((s, k) => s + numOr(ux.lines[k], 0), 0) : 0;
+    const mgmtPct = ux ? numOr(ux.mgmtPct, 0) / 100 : 0;
 
     // ---- Build year rows (0 = acquisition snapshot, 1..hold = projection) ----
     // Operating rows come first: lender sizing (min DSCR) needs NOI before the loans exist.
     // Year 1 holds at in-place GPR/OpEx/other (no growth); growth compounds from year 2 on.
-    const otherIncomeStab = (deal.stabOtherIncome == null || deal.stabOtherIncome === '')
-      ? otherIncome : numOr(deal.stabOtherIncome, otherIncome);
+    // Underwritten other income: RUBS ($/unit/mo x % of units billed) + other income ($/unit/mo)
+    // when set in the detail panel; otherwise the stabilized figure, else the trailing amount.
+    const uo = deal.uwOtherIncome && deal.uwOtherIncome.mode === 'lines' ? deal.uwOtherIncome : null;
+    const otherIncomeStab = uo
+      ? units * 12 * (numOr(uo.rubsPUPM, 0) * numOr(uo.rubsPct, 100) / 100 + numOr(uo.otherPUPM, 0))
+      : (deal.stabOtherIncome == null || deal.stabOtherIncome === '') ? otherIncome : numOr(deal.stabOtherIncome, otherIncome);
     const rows = [];
     for (let y = 0; y <= hold; y++) {
       const g = Math.max(0, y - 1);                       // growth exponent: 0 for acq yr & yr 1
       const gpr = gpr0 * Math.pow(1 + gprGrowth, g);
-      const opex = opexBase * Math.pow(1 + opexGrowth, g);
       const vac = y === 0 ? inPlaceEconVac : econVacForYear(y);
       const baseOther = y === 0 ? otherIncome : otherIncomeStab;  // stabilized other income carries/overrides
       const otherInc = baseOther * Math.pow(1 + gprGrowth, g);
       const egi = gpr > 0 ? gpr * (1 - vac) + otherInc : (y === 0 ? egi0 : egi0 * Math.pow(1 + gprGrowth, g));
+      const opex = ux ? opexFixedLines * Math.pow(1 + opexGrowth, g) + mgmtPct * egi : opexBase * Math.pow(1 + opexGrowth, g);
       const noi = egi - opex;
       rows.push({ year: y, gpr, vac, egi, opex, noi });
     }
@@ -336,7 +345,7 @@
       gpr0, physVac, ltl, badDebt, concessions, otherIncome,
       econLoss0, inPlaceEconVac, egi0,
       stabVac, stabYear,
-      opexBase,
+      opexBase, opexLinesOn: !!ux, opexFixedLines, mgmtPct, otherIncomeLinesOn: !!uo, otherIncomeStab,
       fin, acqLoan, acqProceeds, acqLabel,
       refiOn, refiYear, refiValue, refiProceeds, refiPayoff, refiCashOut, refiCost, refiLoan,
       closingCosts, initialEquity, equityBalance,

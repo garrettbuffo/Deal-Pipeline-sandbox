@@ -2107,23 +2107,32 @@ function parseRentRollTabular(text){
   const rows = parseRows(text, delim);
   // locate the header row (needs a unit column, a market-rent column, and a rent column).
   // Tolerant matchers cover the many label variants brokers/PM software use.
-  const isUnit   = (c)=> ['unit','unit #','unit#','unit no','unit no.','unit number','unit id','unit name','apt','apt #','apt no','apartment','space','door'].includes(c) || /^(unit|apt|apartment|bldg)\b/.test(c) || /\bunit\s*(#|no\.?|number|id)?$/.test(c);
-  const isMarket = (c)=> c==='market' || /market\s*(rent|rate)?/.test(c) || /gross.*market/.test(c);
-  const isRent   = (c)=> !/market/.test(c) && (['rent','actual rent','lease rent','current rent','base rent','scheduled rent','charge','actual','tenant rent','net rent','monthly rent','contract rent','lease rent/charge'].includes(c) || /^rent\b/.test(c) || /\brent$/.test(c));
+  const notUnitId = (c)=> /type|plan|sq|\bsf\b|size|status|rent|bed|bath|model/.test(c);
+  const isUnit   = (c)=> ['unit','unit #','unit#','unit no','unit no.','unit number','unit id','unit name','apt','apt #','apt no','apartment','space','door'].includes(c) || (!notUnitId(c) && (/^(unit|apt|apartment|bldg)\b/.test(c) || /\bunit\s*(#|no\.?|number|id)?$/.test(c)));
+  const isMarket = (c)=> !/\/\s*sf|per\s*sf|psf/.test(c) && (c==='market' || /market\s*(rent|rate)?/.test(c) || /gross.*market/.test(c));
+  const isRent   = (c)=> !/market|\/\s*sf|psf/.test(c) && (['rent','actual rent','lease rent','current rent','base rent','scheduled rent','charge','actual','tenant rent','net rent','monthly rent','contract rent','lease rent/charge'].includes(c) || /^rent\b/.test(c) || /\brent$/.test(c));
   const isStatus = (c)=> c.includes('status') || c.includes('occupanc') || c==='lease status';
+  const isType   = (c)=> ['type','unit type','floorplan','floor plan','plan','model','unit plan','bd/ba','bed/bath','unit style','style'].includes(c) || /^(unit\s*)?(type|floor\s*plan)\b/.test(c);
+  const isSF     = (c)=> ['sf','sqft','sq ft','sq. ft.','sq.ft.','sq ft.','square feet','square footage','unit sf','unit sqft','unit sq ft','size','rentable sf','net sf','area'].includes(c) || /^(sq\.?\s*f(ee)?t|square\s*f)/.test(c);
+  const isStart  = (c)=> /lease\s*(start|from|begin)|move[\s-]*in/.test(c);
+  const isBeds   = (c)=> /^(beds?|bedrooms?|br|bd)$/.test(c);
+  const isBaths  = (c)=> /^(baths?|bathrooms?|ba)$/.test(c);
   let hi = -1, cols = null;
   for(let i=0;i<rows.length;i++){
     const r = rows[i].map((c)=>c.trim().toLowerCase());
     const unitIdx   = r.findIndex(isUnit);
     const marketIdx = r.findIndex(isMarket);
     const rentIdx   = r.findIndex(isRent);
-    const statusIdx = r.findIndex(isStatus);
-    if(unitIdx>=0 && marketIdx>=0 && rentIdx>=0){ hi=i; cols={unitIdx,marketIdx,rentIdx,statusIdx}; break; }
+    if(unitIdx>=0 && marketIdx>=0 && rentIdx>=0){
+      hi=i; cols={unitIdx,marketIdx,rentIdx,statusIdx:r.findIndex(isStatus),typeIdx:r.findIndex(isType),sfIdx:r.findIndex(isSF),
+        startIdx:r.findIndex(isStart),bedIdx:r.findIndex(isBeds),bathIdx:r.findIndex(isBaths)};
+      break;
+    }
   }
   if(hi<0) return null;
-  let totalUnits=0, vacantUnits=0, mAll=0, mInH=0, ltlSum=0;
-  const vacantUnitList = [];
+  const units = [];
   const seenUnits = new Set(); // dedupe charge-code rows (multiple rows per unit)
+  const cell = (r, idx) => idx>=0 ? (r[idx]||'').trim() : '';
   for(let i=hi+1;i<rows.length;i++){
     const r = rows[i]; if(!r || !r.length) continue;
     const unit = (r[cols.unitIdx]||'').trim();
@@ -2132,39 +2141,77 @@ function parseRentRollTabular(text){
     seenUnits.add(unit);
     const market = money(r[cols.marketIdx]);
     const rent   = money(r[cols.rentIdx]);
-    const status = cols.statusIdx>=0 ? (r[cols.statusIdx]||'').trim() : '';
     if(market==null && rent==null) continue; // not a real unit row
-    totalUnits++;
-    if(market!=null) mAll += market;
-    // Physical vacancy is determined by STATUS, not by a zero rent. A unit on Notice or in
-    // Eviction still has a paying tenant (and may show $0 in the rent column) — it is OCCUPIED.
-    // Only when there is no status column at all do we fall back to "no rent ⇒ vacant".
-    const statusKnown = cols.statusIdx>=0;
+    let type = cell(r, cols.typeIdx);
+    if(!type && cols.bedIdx>=0) type = (cell(r, cols.bedIdx) || '0') + 'x' + (cell(r, cols.bathIdx) || '1');
+    units.push({ id: unit, type, sf: money(cell(r, cols.sfIdx)), market, rent, status: cell(r, cols.statusIdx), leaseStart: cell(r, cols.startIdx), statusKnown: cols.statusIdx>=0 });
+  }
+  return summarizeRentRollUnits(units, 'Parsed ' + units.length + ' units directly from the rent-roll table.');
+}
+
+// Normalize a lease-start cell (Excel serial, m/d/yyyy or ISO) to yyyy-mm-dd, else ''.
+function rrDate(v){
+  const t = String(v==null?'':v).trim(); if(!t) return '';
+  const n = Number(t);
+  if(!isNaN(n) && n > 20000 && n < 80000){ const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000); return d.toISOString().slice(0,10); }
+  const m = t.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if(m){ const y = m[3].length===2 ? 2000 + Number(m[3]) : Number(m[3]); return y + '-' + String(m[1]).padStart(2,'0') + '-' + String(m[2]).padStart(2,'0'); }
+  const d = Date.parse(t); return isNaN(d) ? '' : new Date(d).toISOString().slice(0,10);
+}
+
+// Unit rows → the aggregates the Rent Roll banner applies, plus the standardized unit list the
+// Rent Roll Matrix tab groups by type (multifamily-uw Unit Mix: type, SF, market, in-place, occupied,
+// lease start). Physical vacancy is decided by STATUS, not by a zero rent.
+function summarizeRentRollUnits(raw, notes){
+  if(!raw || !raw.length) return null;
+  let vacantUnits=0, mAll=0, mInH=0, ltlSum=0;
+  const vacantUnitList = [];
+  const units = raw.map((u) => {
+    const status = u.status || '';
+    const statusKnown = u.statusKnown !== false && status !== '';
     // A unit counts as physically VACANT only when its status says vacant AND it is NOT
     // pre-leased. "Vacant-Rented" / "Vacant-Leased" / applicant units have income coming and
-    // are excluded from the vacancy count (they are not an available-unit loss). Units on
-    // Notice or in Eviction are OCCUPIED. With no status column, fall back to "no rent ⇒ vacant".
+    // are excluded from the vacancy count. Units on Notice or in Eviction are OCCUPIED.
+    // With no status, fall back to "no rent ⇒ vacant".
     const preLeased = /\b(rented|leased|pre[\s-]?leased|applicant|pending|reserved)\b/i.test(status);
-    const isVac = statusKnown
-      ? (/vacant/i.test(status) && !preLeased) || (status==='' && (rent==null || rent===0))
-      : (rent==null || rent===0);
-    if(isVac){ vacantUnits++; vacantUnitList.push(unit); }
-    else if(rent!=null){
-      mInH += rent;
-      // Loss to lease is per-unit: market minus current, floored at 0 (an in-place
-      // lease ABOVE market contributes nothing, never a negative offset).
-      if(market!=null) ltlSum += Math.max(0, market - rent);
+    const isVac = statusKnown ? (/vacant/i.test(status) && !preLeased) : (u.rent==null || u.rent===0);
+    if(u.market!=null) mAll += u.market;
+    if(isVac){ vacantUnits++; vacantUnitList.push(u.id); }
+    else if(u.rent!=null){
+      mInH += u.rent;
+      // Loss to lease is per-unit: market minus current, floored at 0.
+      if(u.market!=null) ltlSum += Math.max(0, u.market - u.rent);
     }
-  }
-  if(totalUnits < 1) return null;
+    return { id: String(u.id||''), type: String(u.type||'').trim(), sf: u.sf && u.sf > 0 ? Math.round(u.sf) : null,
+      market: u.market==null ? null : Math.round(u.market), rent: u.rent==null ? null : Math.round(u.rent), occ: !isVac, leaseStart: rrDate(u.leaseStart) };
+  });
+  // Backfill missing SF with the most common SF for that unit type; untyped units group by SF.
+  const modeSf = {};
+  units.forEach((u) => { if(u.type && u.sf){ const m = modeSf[u.type] || (modeSf[u.type] = {}); m[u.sf] = (m[u.sf]||0) + 1; } });
+  units.forEach((u) => {
+    if(!u.sf && u.type && modeSf[u.type]){ const m = modeSf[u.type]; u.sf = Number(Object.keys(m).sort((a,b) => m[b]-m[a])[0]); }
+    if(!u.type) u.type = u.sf ? u.sf + ' SF' : 'All units';
+  });
   return {
-    totalUnits, vacantUnits,
+    totalUnits: units.length, vacantUnits,
     marketRentMonthlyAll: Math.round(mAll),
     inHouseRentMonthlyOccupied: Math.round(mInH),
     lossToLeaseMonthly: Math.round(ltlSum),
-    vacantUnitList,
-    notes: `Parsed ${totalUnits} units directly from the rent-roll table.`
+    vacantUnitList, units, notes,
   };
+}
+
+// CSV unit list returned by the model → raw unit rows for summarizeRentRollUnits.
+function parseRentRollCsv(out){
+  const body = String(out||'').replace(/```[a-z]*\n?/gi,'');
+  const money = (v) => { const n = Number(String(v==null?'':v).replace(/[$,()\s]/g,'')); return isNaN(n) || String(v).trim()==='' ? null : n; };
+  const units = [];
+  body.split(/\r?\n/).forEach((line) => {
+    const c = line.split('|').map((x) => x.trim());
+    if(c.length < 5 || /^unit$/i.test(c[0]) || !c[0]) return;
+    units.push({ id: c[0], type: c[1], sf: money(c[2]), market: money(c[3]), rent: money(c[4]), status: c[5] || '', leaseStart: c[6] || '', statusKnown: !!c[5] });
+  });
+  return units;
 }
 
 function CloudSplash({ text }) {
@@ -3233,7 +3280,19 @@ Do not include any text outside the JSON object.`;
       const fullText = await extractFileText(file);
       let agg = parseRentRollTabular(fullText);
       if (!agg) {
-        // model fallback — ask for the aggregate monthly figures only
+        // model fallback 1 — the unit list as compact pipe-delimited rows, so the matrix
+        // (type, SF, Max, Top 25%, last signed) can be built in code like a clean table
+        const excerpt = rentRollExcerpt(fullText, 60000);
+        const unitPrompt = `You are reading a multifamily RENT ROLL for Altus Equity. List EVERY current unit (occupied and vacant; skip future residents, applicants and charge-detail rows) as one line per unit, pipe-delimited, with NO header, NO commentary and NO code fences:
+unit|unit type|sq ft|market rent|current rent|status|lease start
+Rules: unit type exactly as the roll labels it (floor plan or bed/bath; never rename it). Rents are MONTHLY numbers with no $ or commas; current rent is the BASE rent charge only (never total charges); leave blank if none. Status is the roll's own status text (Occupied, Vacant, Vacant-Leased, Notice, Eviction, Model, Down...). Lease start as m/d/yyyy or blank.
+
+RENT ROLL:
+${excerpt}`;
+        try { agg = summarizeRentRollUnits(parseRentRollCsv(await aiComplete(unitPrompt, { maxTokens: 16000 })), 'Units read by Claude from the rent roll.'); } catch (e) { agg = null; }
+      }
+      if (!agg) {
+        // model fallback 2 — ask for the aggregate monthly figures only
         const excerpt = rentRollExcerpt(fullText, 60000);
         const prompt = `You are reading a multifamily RENT ROLL. Return ONLY a JSON object — no commentary — with these MONTHLY aggregate figures summed across every CURRENT resident unit (exclude future/applicant rows):
 {
@@ -3253,6 +3312,10 @@ RENT ROLL:
 ${excerpt}`;
         const out = await aiComplete(prompt);
         agg = safeParseJSON(out);
+      }
+      // Keep the standardized unit list on the deal for the Rent Roll Matrix tab.
+      if (agg && Array.isArray(agg.units) && agg.units.length) {
+        patch(dealId, { rentRoll: { fileName: file.name, parsedAt: new Date().toISOString(), units: agg.units } });
       }
       if (!agg || !agg.totalUnits) throw new Error('No unit rows could be read from this rent roll.');
       const mAll = Number(agg.marketRentMonthlyAll) || 0;
@@ -3309,8 +3372,29 @@ rules for otherIncome — total other income (RUBS / utility reimbursement, fees
 
 T-12 text:
 ${text}`;
-      const out = await aiComplete(prompt);
+      const linesPrompt = `You are categorizing a multifamily T-12 operating statement line by line for Altus Equity, following the Altus underwriting template. Return ONLY a valid JSON object, no commentary:
+{"period":"T-12 ending Mon YYYY","months":12,"lines":[{"name":"line item as written","category":"Rental Revenue","total":0}]}
+Include EVERY leaf line item (one entry per account line). SKIP section headers, subtotals, totals, NOI and anything below NOI (debt service, interest, depreciation, amortization, capital expenditures, partnership/asset-management fees).
+category must be exactly one of:
+Revenue: "Rental Revenue", "Loss to Lease", "Physical Vacancy", "Concessions", "Bad Debt", "RUBs", "Other Income"
+Expense: "General & Admin", "Maintenance & Repairs", "Management", "Payroll / Payroll Taxes", "Marketing", "Contract Services", "Taxes", "Insurance", "Utilities", "Other"
+Categorize by the statement's own SECTION, not by keywords in the line name: a staff title such as "Property Manager" or "Groundskeeper" under a Payroll section is Payroll; "Trash Contract" follows whichever section it sits in. Turnover / make-ready sections are Maintenance & Repairs. Fire & safety is Contract Services when listed there, else General & Admin. Split a Taxes & Insurance section per line. RUBs = utility reimbursement income (water/sewer, trash, electric, pest income, utility billing); every other non-rent income line is Other Income. Employee units and model units are Concessions unless shown as vacancy.
+total = the trailing-12 annual total for the line, keeping the statement's native sign (revenue positive; vacancy, loss to lease, concessions and bad debt negative; expenses positive). If the statement covers fewer than 12 months, annualize each line and set months to the months shown.
+
+T-12 text:
+${fullText.slice(0, 60000)}`;
+      const [out, linesOut] = await Promise.all([
+        aiComplete(prompt),
+        aiComplete(linesPrompt, { maxTokens: 12000 }).catch(() => null),
+      ]);
       const parsed = safeParseJSON(out) || {};
+      const lp = linesOut ? safeParseJSON(linesOut) : null;
+      const okCats = ['Rental Revenue', 'Loss to Lease', 'Physical Vacancy', 'Concessions', 'Bad Debt', 'RUBs', 'Other Income',
+        'General & Admin', 'Maintenance & Repairs', 'Management', 'Payroll / Payroll Taxes', 'Marketing', 'Contract Services', 'Taxes', 'Insurance', 'Utilities', 'Other'];
+      const lines = lp && Array.isArray(lp.lines) ? lp.lines
+        .filter((l) => l && l.name && !isNaN(Number(l.total)))
+        .map((l) => ({ name: String(l.name).slice(0, 80), category: okCats.includes(l.category) ? l.category : 'Other', total: Math.round(Number(l.total)) })) : [];
+      if (lines.length) patch(dealId, { t12Lines: { fileName: file.name, parsedAt: new Date().toISOString(), period: (lp && lp.period) || '', lines } });
       setT12Map((m) => ({ ...m, [dealId]: { status: 'done', fileName: file.name, parsed } }));
       setOpenId(dealId);
     } catch (e) {
