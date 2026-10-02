@@ -6,14 +6,16 @@
 
   // Quote defaults equal the financing presets the Full UW tab shipped with, so any deal
   // still on a preset's rate keeps identical numbers until a quote is changed here.
+  const VERSION = 3;
   const DEFAULTS = {
+    version: VERSION,
     updatedAt: null,
     quotes: {
-      hudAcq:     { label: 'HUD 223(f)',                use: 'acquisition', rate: 5.75, amYears: 35, ioYears: 0, maxLev: 85, basis: 'LTV', minDscr: 1.176 },
-      agencyAcq:  { label: 'Agency (Fannie / Freddie)', use: 'acquisition', rate: 5.5,  amYears: 30, ioYears: 2, maxLev: 70, basis: 'LTV', minDscr: 1.25 },
-      bridge:     { label: 'Bridge / bank',             use: 'acquisition', rate: 6.25, amYears: 30, ioYears: 3, maxLev: 70, basis: 'LTC', minDscr: 1.1 },
-      hudRefi:    { label: 'HUD 223(f) takeout',        use: 'refinance',   rate: 6.0,  amYears: 35, ioYears: 0, maxLev: 80, basis: 'LTV', minDscr: 1.176 },
-      agencyRefi: { label: 'Agency takeout',            use: 'refinance',   rate: 5.75, amYears: 30, ioYears: 0, maxLev: 75, basis: 'LTV', minDscr: 1.25 },
+      hudAcq:     { label: 'HUD 223(f)',                use: 'acquisition', rate: 5.75, amYears: 35, ioYears: 0, maxLev: 85, basis: 'LTV', minDscr: 1.176, loanFeePct: 2, dscrBasis: 'amortizing' },
+      agencyAcq:  { label: 'Agency (Fannie / Freddie)', use: 'acquisition', rate: 5.5,  amYears: 30, ioYears: 2, maxLev: 70, basis: 'LTV', minDscr: 1.25, loanFeePct: 1.5, dscrBasis: 'amortizing' },
+      bridge:     { label: 'Bridge / bank',             use: 'acquisition', rate: 6.25, amYears: 30, ioYears: 3, maxLev: 70, basis: 'LTC', minDscr: null, loanFeePct: 1.5, dscrBasis: 'io' },
+      hudRefi:    { label: 'HUD 223(f) takeout',        use: 'refinance',   rate: 6.0,  amYears: 35, ioYears: 0, maxLev: 80, basis: 'LTV', minDscr: 1.176, loanFeePct: 2, dscrBasis: 'amortizing' },
+      agencyRefi: { label: 'Agency takeout',            use: 'refinance',   rate: 5.75, amYears: 30, ioYears: 0, maxLev: 75, basis: 'LTV', minDscr: 1.25, loanFeePct: 1.5, dscrBasis: 'amortizing' },
     },
     // Acquisition fee by purchase price. 'band' = the whole price at its band's rate;
     // 'blended' = each slice of price at its own band's rate (no drop at a breakpoint).
@@ -21,12 +23,14 @@
       method: 'band',
       tiers: [{ upTo: 10000000, pct: 3 }, { upTo: 20000000, pct: 2 }, { upTo: null, pct: 1.5 }],
     },
+    // Loan fees for debt with no quote (custom terms or an assumed loan), % of loan.
+    otherLoanFeePct: 1.5,
     // Other closing costs. basis: 'flat' ($), 'price' (% of purchase price), 'loan' (% of loan).
+    // Lender / loan fees are not listed here: they come from each debt quote's loan fee.
     closing: [
       { id: 'legal',   label: 'Legal & entity formation',                          basis: 'flat',  value: 20000 },
       { id: 'title',   label: 'Title, escrow & recording',                         basis: 'price', value: 0.4 },
       { id: 'reports', label: 'Third-party reports (appraisal, PCA, Phase I, survey)', basis: 'flat',  value: 12000 },
-      { id: 'lender',  label: 'Lender fees & loan costs',                          basis: 'loan',  value: 1.0 },
       { id: 'other',   label: 'Contingency / other',                               basis: 'price', value: 0.25 },
     ],
   };
@@ -41,7 +45,15 @@
   function merge(saved) {
     const base = clone(DEFAULTS);
     if (!saved || typeof saved !== 'object') return base;
-    const out = { ...base, ...saved };
+    // v1 kept loan fees as a generic closing-cost line; v2 prices them per debt quote.
+    if (!saved.version || saved.version < 2) saved = { ...saved, closing: (saved.closing || base.closing).filter((c) => c.id !== 'lender') };
+    // v3: bridge loans size on loan-to-cost only by default (bridge lenders fund an interest
+    // reserve rather than require in-place DSCR), so clear the old 1.10x placeholder.
+    if (!saved.version || saved.version < 3) {
+      const b = ((saved.quotes || {}).bridge) || null;
+      if (b && Number(b.minDscr) === 1.1) saved = { ...saved, quotes: { ...saved.quotes, bridge: { ...b, minDscr: null } } };
+    }
+    const out = { ...base, ...saved, version: VERSION };
     out.quotes = { ...base.quotes };
     Object.keys(base.quotes).forEach((k) => { out.quotes[k] = { ...base.quotes[k], ...((saved.quotes || {})[k] || {}) }; });
     out.acqFee = { ...base.acqFee, ...(saved.acqFee || {}) };
@@ -87,11 +99,30 @@
     return { fee: p * n(t.pct) / 100, pct: n(t.pct) / 100 };
   }
 
-  // Full closing-cost build for a deal: acquisition fee plus each other line item.
-  function closingCosts(price, loan) {
-    const p = n(price), L = n(loan);
-    const fee = acqFee(p);
-    const items = [{ id: 'acqFee', label: 'Acquisition fee', amount: fee.fee, note: (fee.pct * 100).toFixed(2) + '% of price' }];
+  // Loan-fee % for the acquisition loan: its quote's fee, else the other-debt fee.
+  function acqLoanFeePct(rr) {
+    return rr && rr.quote && rr.quote.loanFeePct != null ? n(rr.quote.loanFeePct) : n(state.otherLoanFeePct);
+  }
+  // Refi loan fees: the takeout quote's fee unless the deal entered its own % (2% was the
+  // refi section's old default, so a legacy 2% with no explicit mode still follows the quote).
+  function refiCostPct(refi, rr) {
+    const r = refi || {};
+    const stored = r.costPct == null || r.costPct === '' ? null : Number(r.costPct);
+    const custom = r.costMode === 'custom' || (r.costMode == null && stored != null && stored !== 2);
+    if (custom) return { pct: stored == null ? 2 : stored, linked: false };
+    return { pct: rr && rr.quote && rr.quote.loanFeePct != null ? n(rr.quote.loanFeePct) : n(state.otherLoanFeePct), linked: !!(rr && rr.quote) };
+  }
+
+  // Full closing-cost build for a deal: acquisition fee, loan fees and each other line item.
+  // opts: { loan, loanFeePct, feeOverride } — feeOverride lets a portfolio pass in its share
+  // of a fee tiered on the total portfolio price.
+  function closingCosts(price, opts) {
+    const o = typeof opts === 'number' ? { loan: opts } : (opts || {});
+    const p = n(price), L = n(o.loan);
+    const fee = o.feeOverride != null ? { fee: n(o.feeOverride), pct: p > 0 ? n(o.feeOverride) / p : 0 } : acqFee(p);
+    const items = [{ id: 'acqFee', label: 'Acquisition fee', amount: fee.fee, note: (fee.pct * 100).toFixed(2) + '% of price' + (o.feeOverride != null ? ' (portfolio tier)' : '') }];
+    const feePct = o.loanFeePct == null ? n(state.otherLoanFeePct) : n(o.loanFeePct);
+    if (L > 0) items.push({ id: 'loanFees', label: 'Loan fees', amount: L * feePct / 100, note: feePct + '% of loan' });
     (state.closing || []).forEach((c) => {
       const v = n(c.value);
       const amount = c.basis === 'price' ? p * v / 100 : c.basis === 'loan' ? L * v / 100 : v;
@@ -113,5 +144,5 @@
     return { rate: linked ? n(q.rate) : (stored == null ? fallback : stored), linked, quoteKey, quote: q };
   }
 
-  window.AltusAssumptions = { DEFAULTS, SCENARIO_QUOTE, get, set, reset, subscribe, acqFee, closingCosts, resolveRate };
+  window.AltusAssumptions = { DEFAULTS, SCENARIO_QUOTE, get, set, reset, subscribe, acqFee, closingCosts, resolveRate, acqLoanFeePct, refiCostPct };
 })();

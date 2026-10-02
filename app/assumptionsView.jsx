@@ -39,7 +39,14 @@ function DebtQuotesCard({ st, linked }) {
             <span style={{ fontSize: 11, color: 'var(--muted)', fontWeight: 600 }}>{q.basis}</span>
           </div>
         </td>
-        <td style={A_TD}><FieldInput value={q.minDscr} onChange={(v) => upd(k, 'minDscr', v)} suffix="x" align="left" width={86} /></td>
+        <td style={A_TD}><FieldInput value={q.minDscr == null ? '' : q.minDscr} onChange={(v) => upd(k, 'minDscr', v === '' ? null : v)} suffix="x" align="left" width={86} placeholder="none" /></td>
+        <td style={A_TD}>
+          <select value={q.dscrBasis || 'amortizing'} onChange={(e) => upd(k, 'dscrBasis', e.target.value)} aria-label="DSCR test payment"
+            style={{ ...A_TEXT, width: 128, cursor: 'pointer' }}>
+            <option value="amortizing">Amortizing</option><option value="io">Interest-only</option>
+          </select>
+        </td>
+        <td style={A_TD}><FieldInput value={q.loanFeePct} onChange={(v) => upd(k, 'loanFeePct', v)} suffix="%" align="left" width={80} /></td>
         <td style={{ ...A_TD, textAlign: 'right' }} className="num">
           <span title="Deals whose rate currently follows this quote" style={{ fontWeight: 700, color: linked[k] ? 'var(--accent)' : 'var(--faint)' }}>{linked[k] || 0}</span>
         </td>
@@ -47,21 +54,26 @@ function DebtQuotesCard({ st, linked }) {
   };
   return (
     <Card title="Current Debt Quotes"
-      right={<span style={{ fontSize: 12, color: 'var(--muted)' }}>Linked deals follow the rate here; LTV, IO and amortization are defaults when a preset is applied</span>}
+      right={<span style={{ fontSize: 12, color: 'var(--muted)' }}>Loans size to the lesser of max leverage and min DSCR; leave min DSCR blank to size on leverage only</span>}
       pad={false}>
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000 }}>
           <thead><tr>
             <th style={A_TH}>Program</th><th style={A_TH}>Rate</th><th style={A_TH}>Amortization</th><th style={A_TH}>Interest-Only</th>
-            <th style={A_TH}>Max Leverage</th><th style={A_TH}>Min DSCR</th><th style={{ ...A_TH, textAlign: 'right' }}>Linked Deals</th>
+            <th style={A_TH}>Max Leverage</th><th style={A_TH}>Min DSCR</th><th style={A_TH}>DSCR Test</th><th style={A_TH}>Loan Fee</th><th style={{ ...A_TH, textAlign: 'right' }}>Linked Deals</th>
           </tr></thead>
           <tbody>
-            <AGroupRow label="At acquisition" cols={7} />
+            <AGroupRow label="At acquisition" cols={9} />
             {keys.filter((k) => st.quotes[k].use === 'acquisition').map(row)}
-            <AGroupRow label="Refinance / takeout" cols={7} />
+            <AGroupRow label="Refinance / takeout" cols={9} />
             {keys.filter((k) => st.quotes[k].use === 'refinance').map(row)}
           </tbody>
         </table>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: '1px solid var(--line)', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, color: 'var(--slate)' }}>Loan fees on debt without a quote (custom terms or an assumed loan)</span>
+        <FieldInput value={st.otherLoanFeePct} onChange={(v) => window.AltusAssumptions.set((s) => ({ ...s, otherLoanFeePct: v }))} suffix="% of loan" align="left" width={130} />
+        <span style={{ fontSize: 12, color: 'var(--faint)', marginLeft: 'auto' }}>Linked deals follow each quote's rate and loan fee</span>
       </div>
     </Card>);
 }
@@ -127,17 +139,17 @@ function ClosingPreviewCard({ st }) {
   const prices = [2e6, 5e6, 10e6, 15e6, 25e6, 50e6, 100e6];
   const LOAN = 0.7;
   return (
-    <Card title="Total Closing Cost by Deal Size" right={<span style={{ fontSize: 12, color: 'var(--muted)' }}>assumes a {LOAN * 100}% loan for lender fees</span>} pad={false}>
+    <Card title="Total Closing Cost by Deal Size" right={<span style={{ fontSize: 12, color: 'var(--muted)' }}>includes loan fees on a {LOAN * 100}% loan at {st.otherLoanFeePct}% (HUD quotes use their own fee)</span>} pad={false}>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
           <thead><tr>
             <th style={A_TH}>Purchase Price</th><th style={{ ...A_TH, textAlign: 'right' }}>Acquisition Fee</th>
-            <th style={{ ...A_TH, textAlign: 'right' }}>Other Closing Costs</th><th style={{ ...A_TH, textAlign: 'right' }}>Total</th>
+            <th style={{ ...A_TH, textAlign: 'right' }}>Loan Fees + Other Costs</th><th style={{ ...A_TH, textAlign: 'right' }}>Total</th>
             <th style={{ ...A_TH, textAlign: 'right' }}>% of Price</th>
           </tr></thead>
           <tbody>
             {prices.map((p) => {
-              const c = A.closingCosts(p, p * LOAN);
+              const c = A.closingCosts(p, { loan: p * LOAN, loanFeePct: st.otherLoanFeePct });
               return (
                 <tr key={p}>
                   <td style={{ ...A_TD, fontWeight: 600 }} className="num">{fmtShort(p)}</td>

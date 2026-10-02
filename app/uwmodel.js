@@ -91,7 +91,8 @@
   }
 
   // ---- The model -----------------------------------------------------------
-  function computeUW(deal) {
+  function computeUW(deal, opts) {
+    opts = opts || {};
     // Portfolios: each property is underwritten independently — the deal-level model IS
     // the combined roll-up of all properties, not a model of the deal's own (unset) fields.
     if (deal && deal.isPortfolio && Array.isArray(deal.properties) && deal.properties.length > 1) {
@@ -138,33 +139,8 @@
     // ---- OpEx base (UW assumption × units) ----
     const opexBase = numOr(deal.marketOpexPerUnit, 0) * units || numOr(deal.currentOpexTotal, 0);
 
-    // ---- Acquisition financing ----
-    const fin = deal.acqFin || { mode: 'none' };
-    const A = window.AltusAssumptions || null;   // firm-wide debt quotes + closing-cost schedule
-    let acqLoan = null, acqProceeds = 0, acqLabel = 'All cash', acqRate = null;
-    if (fin.mode === 'new') {
-      const n = fin.new || {};
-      const basisForLtv = (n.basis === 'LTC') ? basis : price;
-      acqProceeds = basisForLtv * (numOr(n.pct, 65) / 100);
-      acqRate = A ? A.resolveRate(n, A.SCENARIO_QUOTE[fin.scenario], 6) : { rate: numOr(n.rate, 6), linked: false, quoteKey: null, quote: null };
-      acqLoan = makeLoan({ principal: acqProceeds, rate: acqRate.rate, amYears: numOr(n.amYears, 30), ioYears: numOr(n.ioYears, 0) });
-      acqLabel = 'New ' + (n.basis === 'LTC' ? 'LTC' : 'LTV') + ' loan';
-    } else if (fin.mode === 'assumable') {
-      const a = fin.assumable || {};
-      const orig = numOr(a.origAmount, 0);
-      const acqDate = deal.dateUnderContract || window.ALTUS_TODAY;
-      const elapsed = monthsBetween(a.origDate, acqDate);
-      acqLoan = makeLoan({ principal: orig, rate: numOr(a.rate, 5), amYears: numOr(a.amYears, 30), ioYears: numOr(a.ioYears, 0), origMonthsAtAcq: elapsed });
-      acqProceeds = acqLoan.balanceAtAcq;  // you assume the amortized balance
-      acqLabel = 'Assumed debt';
-    }
-
-    // ---- Refinance ----
-    const refi = deal.refi || { enabled: false };
-    const refiOn = !!refi.enabled && refi.year > 0 && refi.year <= hold;
-    const refiYear = refiOn ? clamp(Math.round(numOr(refi.year, 3)), 1, hold) : null;
-
     // ---- Build year rows (0 = acquisition snapshot, 1..hold = projection) ----
+    // Operating rows come first: lender sizing (min DSCR) needs NOI before the loans exist.
     // Year 1 holds at in-place GPR/OpEx/other (no growth); growth compounds from year 2 on.
     const otherIncomeStab = (deal.stabOtherIncome == null || deal.stabOtherIncome === '')
       ? otherIncome : numOr(deal.stabOtherIncome, otherIncome);
@@ -181,20 +157,68 @@
       rows.push({ year: y, gpr, vac, egi, opex, noi });
     }
 
-    // ---- Refi sizing (uses refi-year NOI) ----
+    const A = window.AltusAssumptions || null;   // firm-wide debt quotes + closing-cost schedule
+    // Lender-style sizing: the lesser of max leverage and the loan the minimum DSCR supports,
+    // sized on the amortizing payment the way lenders size. A deal can switch to leverage-only.
+    // dscrBasis 'io' (bridge): the test uses the interest-only payment when the loan has IO.
+    function sizeLoan(levLoan, noi, rate, amYears, minDscr, rule, dscrBasis, ioYears) {
+      const io = dscrBasis === 'io' && ioYears > 0;
+      const out = { levLoan, dscrLoan: null, minDscr, rule: rule === 'ltv' ? 'ltv' : 'auto', binding: 'leverage', principal: levLoan, testedOn: io ? 'interest-only' : 'amortizing' };
+      if (out.rule === 'ltv' || !(minDscr > 0) || !(noi > 0)) return out;
+      const annualPerDollar = io ? rate / 100 : 12 * pmt(1, rate / 100 / 12, Math.max(1, Math.round(amYears * 12)));
+      out.dscrLoan = annualPerDollar > 0 ? noi / minDscr / annualPerDollar : levLoan;
+      if (out.dscrLoan < levLoan) { out.binding = 'dscr'; out.principal = out.dscrLoan; }
+      return out;
+    }
+    const minDscrFor = (spec, rr) => {
+      if (spec && spec.minDscr != null && spec.minDscr !== '') return Number(spec.minDscr);
+      return rr && rr.quote && rr.quote.minDscr ? Number(rr.quote.minDscr) : null;
+    };
+
+    // ---- Acquisition financing ----
+    const fin = deal.acqFin || { mode: 'none' };
+    let acqLoan = null, acqProceeds = 0, acqLabel = 'All cash', acqRate = null, acqSizing = null;
+    if (fin.mode === 'new') {
+      const n = fin.new || {};
+      const basisForLtv = (n.basis === 'LTC') ? basis : price;
+      acqRate = A ? A.resolveRate(n, A.SCENARIO_QUOTE[fin.scenario], 6) : { rate: numOr(n.rate, 6), linked: false, quoteKey: null, quote: null };
+      const amY = numOr(n.amYears, 30);
+      acqSizing = sizeLoan(basisForLtv * (numOr(n.pct, 65) / 100), rows[1] ? rows[1].noi : 0, acqRate.rate, amY, minDscrFor(n, acqRate), n.sizing,
+        acqRate.quote && acqRate.quote.dscrBasis, numOr(n.ioYears, 0));
+      acqProceeds = acqSizing.principal;
+      acqLoan = makeLoan({ principal: acqProceeds, rate: acqRate.rate, amYears: amY, ioYears: numOr(n.ioYears, 0) });
+      acqLabel = 'New ' + (n.basis === 'LTC' ? 'LTC' : 'LTV') + ' loan';
+    } else if (fin.mode === 'assumable') {
+      const a = fin.assumable || {};
+      const orig = numOr(a.origAmount, 0);
+      const acqDate = deal.dateUnderContract || window.ALTUS_TODAY;
+      const elapsed = monthsBetween(a.origDate, acqDate);
+      acqLoan = makeLoan({ principal: orig, rate: numOr(a.rate, 5), amYears: numOr(a.amYears, 30), ioYears: numOr(a.ioYears, 0), origMonthsAtAcq: elapsed });
+      acqProceeds = acqLoan.balanceAtAcq;  // you assume the amortized balance
+      acqLabel = 'Assumed debt';
+    }
+
+    // ---- Refinance (sized on refi-year NOI) ----
+    const refi = deal.refi || { enabled: false };
+    const refiOn = !!refi.enabled && refi.year > 0 && refi.year <= hold;
+    const refiYear = refiOn ? clamp(Math.round(numOr(refi.year, 3)), 1, hold) : null;
     let refiLoan = null, refiValue = 0, refiProceeds = 0, refiPayoff = 0, refiCashOut = 0, refiCost = 0;
-    let refiRate = null, refiDSCR = null, refiDebtYield = null;
+    let refiRate = null, refiDSCR = null, refiDebtYield = null, refiSizing = null, refiCostPct = null;
     const refiQuoteKey = refi.quote === 'custom' ? null : (refi.quote || 'hudRefi');
     if (refiOn) {
       const refiCap = numOr(refi.cap, 0) / 100;
       const noiR = rows[refiYear].noi;
       refiValue = refiCap > 0 ? noiR / refiCap : 0;
-      refiProceeds = refiValue * (numOr(refi.ltv, 80) / 100);
-      refiPayoff = acqLoan ? acqLoan.balanceAtYearEnd(refiYear) : 0;
-      refiCost = refiProceeds * (numOr(refi.costPct, 2) / 100);   // refinance closing cost, out of proceeds
-      refiCashOut = refiProceeds - refiPayoff - refiCost;
       refiRate = A ? A.resolveRate(refi, refiQuoteKey, 6) : { rate: numOr(refi.rate, 6), linked: false, quoteKey: null, quote: null };
-      refiLoan = makeLoan({ principal: refiProceeds, rate: refiRate.rate, amYears: numOr(refi.amYears, 35), ioYears: numOr(refi.ioYears, 0) });
+      const amR = numOr(refi.amYears, 35);
+      refiSizing = sizeLoan(refiValue * (numOr(refi.ltv, 80) / 100), noiR, refiRate.rate, amR, minDscrFor(refi, refiRate), refi.sizing,
+        refiRate.quote && refiRate.quote.dscrBasis, numOr(refi.ioYears, 0));
+      refiProceeds = refiSizing.principal;
+      refiPayoff = acqLoan ? acqLoan.balanceAtYearEnd(refiYear) : 0;
+      refiCostPct = A ? A.refiCostPct(refi, refiRate) : { pct: numOr(refi.costPct, 2), linked: false };
+      refiCost = refiProceeds * (refiCostPct.pct / 100);   // refinance loan fees, out of proceeds
+      refiCashOut = refiProceeds - refiPayoff - refiCost;
+      refiLoan = makeLoan({ principal: refiProceeds, rate: refiRate.rate, amYears: amR, ioYears: numOr(refi.ioYears, 0) });
       // Lender view of the takeout: refi-year NOI against the new loan's first-year payment
       const refiDS1 = refiLoan.dsForYear(1);
       refiDSCR = refiDS1 > 0 ? noiR / refiDS1 : null;
@@ -233,7 +257,10 @@
       (deal.closingMode == null && deal.closingPct != null && deal.closingPct !== '');
     let closingCosts, closingBreakdown = null;
     if (customClosing || !A) closingCosts = price * closingPct;
-    else { closingBreakdown = A.closingCosts(price, acqProceeds); closingCosts = closingBreakdown.total; }
+    else {
+      closingBreakdown = A.closingCosts(price, { loan: acqProceeds, loanFeePct: A.acqLoanFeePct(acqRate), feeOverride: opts.acqFeeOverride });
+      closingCosts = closingBreakdown.total;
+    }
     const closingPctEff = price > 0 ? closingCosts / price : closingPct;
     const initialEquity = price + closingCosts + capex - acqProceeds;
     function equityBalance(y) {
@@ -251,6 +278,7 @@
       row.yieldOnCost = basis > 0 ? row.noi / basis : 0;
       row.dscr = row.ds > 0 ? row.noi / row.ds : null;
       const balStart = loanBalanceAtYearStart(y);
+      row.loanBalanceStart = balStart;
       row.debtYield = balStart > 0 ? row.noi / balStart : null;   // NOI ÷ loan balance
       const eq = equityBalance(y);
       row.cashOnCash = eq > 0 ? row.netIncome / eq : null;
@@ -303,7 +331,7 @@
       units, price, capex, basis, hold,
       gprGrowth, opexGrowth, closingPct: closingPctEff, sellingPct,
       closingBreakdown, closingCustom: customClosing || !A,
-      acqRate, refiRate, refiQuoteKey, refiDSCR, refiDebtYield,
+      acqRate, acqSizing, refiRate, refiQuoteKey, refiDSCR, refiDebtYield, refiSizing, refiCostPct,
       goingInDebtYield: acqProceeds > 0 && rows[1] ? rows[1].noi / acqProceeds : null,
       gpr0, physVac, ltl, badDebt, concessions, otherIncome,
       econLoss0, inPlaceEconVac, egi0,
@@ -483,7 +511,10 @@
   function computeCombinedUW(deal) {
     const props = (Array.isArray(deal.properties) ? deal.properties : []).filter((p) => hasUWInputs(p));
     if (!props.length) return null;
-    const uws = props.map((p) => computeUW(p));
+    const A = window.AltusAssumptions || null;
+    const totalPrice = props.reduce((s, p) => s + numOr(p.purchasePrice, 0), 0);
+    const portfolioFee = A && totalPrice > 0 ? A.acqFee(totalPrice).fee : null;   // tiered at the portfolio level
+    const uws = props.map((p) => computeUW(p, portfolioFee == null ? {} : { acqFeeOverride: portfolioFee * numOr(p.purchasePrice, 0) / totalPrice }));
     const hold = Math.max(...uws.map((u) => u.hold));
     const rows = [];
     const sumField = (y, f) => uws.reduce((s, u) => s + ((u.rows[y] && u.rows[y][f]) || 0), 0);
@@ -497,6 +528,8 @@
         gpr: sumField(y, 'gpr'), egi: sumField(y, 'egi'), opex: sumField(y, 'opex'),
         noi, ds, amFee: sumField(y, 'amFee'), netIncome,
         loanBalance: sumField(y, 'loanBalance'),
+        loanBalanceStart: sumField(y, 'loanBalanceStart'),
+        debtYield: sumField(y, 'loanBalanceStart') > 0 ? noi / sumField(y, 'loanBalanceStart') : null,
         refiDistribution: sumField(y, 'refiDistribution'), saleProceeds: sumField(y, 'saleProceeds'),
         totalCashFlow: sumField(y, 'totalCashFlow'),
         yieldOnCost: basisY > 0 ? noi / basisY : 0,

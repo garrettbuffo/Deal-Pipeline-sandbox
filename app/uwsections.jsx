@@ -43,6 +43,27 @@ function RateLinkHint({ r, onRelink }) {
       Custom · use quote ({Number(r.quote.rate).toFixed(2)}%)
     </button>);
 }
+/* lender sizing controls: min DSCR (from the quote unless entered) + sizing rule override */
+function SizingFields({ spec, sizing, quote, onSet }) {
+  const own = spec.minDscr != null && spec.minDscr !== '';
+  const qMin = quote && quote.minDscr ? Number(quote.minDscr) : null;
+  return (<>
+    <CAssump label="Min DSCR" hint={own
+      ? (qMin ? <button type="button" onClick={() => onSet('minDscr', null)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 10, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>Custom · use quote ({qMin.toFixed(2)}x)</button> : 'custom')
+      : (qMin ? <span style={{ color: 'var(--accent)', fontWeight: 600 }}>From quote</span> : 'optional')}>
+      <FieldInput value={own ? spec.minDscr : (qMin == null ? '' : qMin)} onChange={(v) => onSet('minDscr', v === '' ? null : v)} suffix="x" align="left" placeholder="none" />
+    </CAssump>
+    <CAssump label="Sizing Rule" w={200} hint={sizing && sizing.minDscr ? 'lesser of the two · DSCR on ' + sizing.testedOn + ' payment' : 'set a min DSCR to size on it'}>
+      <Seg size="sm" value={spec.sizing === 'ltv' ? 'ltv' : 'auto'} options={[{ value: 'auto', label: 'LTV / DSCR' }, { value: 'ltv', label: 'LTV only' }]} onChange={(v) => onSet('sizing', v)} />
+    </CAssump>
+  </>);
+}
+function sizingNote(sz) {
+  if (!sz) return null;
+  if (sz.binding === 'dscr') return 'sized by ' + Number(sz.minDscr).toFixed(2) + 'x DSCR · leverage allows ' + fmtShort(sz.levLoan);
+  if (sz.dscrLoan != null) return 'sized by leverage · DSCR allows ' + fmtShort(sz.dscrLoan);
+  return sz.rule === 'ltv' ? 'leverage only (override)' : null;
+}
 const assumptionQuotes = () => (window.AltusAssumptions ? window.AltusAssumptions.get().quotes : null);
 function CompactGrid({ children }) {
   return <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 18px', marginTop: 14 }}>{children}</div>;
@@ -378,6 +399,7 @@ function AcqFinancingSection({ deal, set, uw }) {
           </CAssump>
           <CAssump label="Amortization"><FieldInput value={n.amYears == null ? 30 : n.amYears} onChange={(v) => setNew('amYears', v)} suffix="yrs" align="left" /></CAssump>
           <CAssump label="Interest-Only"><FieldInput value={n.ioYears == null ? 0 : n.ioYears} onChange={(v) => setNew('ioYears', v)} suffix="yrs" align="left" /></CAssump>
+          <SizingFields spec={n} sizing={uw.acqSizing} quote={uw.acqRate && uw.acqRate.quote} onSet={setNew} />
         </CompactGrid>
         <FinFooter uw={uw} goingInDSCR={goingInDSCR} />
       </>)}
@@ -405,7 +427,7 @@ function FinFooter({ uw, goingInDSCR, assumed }) {
   const dy = uw.goingInDebtYield;
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 12 }}>
-      <FootStat label={assumed ? 'Assumed Balance' : 'Loan Proceeds'} value={moneyFull(uw.acqProceeds)} accent="var(--accent)" />
+      <FootStat label={assumed ? 'Assumed Balance' : 'Loan Proceeds'} value={moneyFull(uw.acqProceeds)} accent="var(--accent)" sub={assumed ? null : sizingNote(uw.acqSizing)} />
       {assumed && <FootStat label="LTV" value={ltv == null ? '—' : (ltv * 100).toFixed(1) + '%'} />}
       <FootStat label="Annual Debt Service" value={moneyFull(ds1)} />
       <FootStat label="Equity Required" value={moneyFull(uw.initialEquity)} sub="incl. closing + capex" />
@@ -479,13 +501,18 @@ function RefiSection({ deal, set, uw }) {
           </CAssump>
           <CAssump label="Amortization"><FieldInput value={refi.amYears == null ? 35 : refi.amYears} onChange={(v) => setRefi('amYears', v)} suffix="yrs" align="left" /></CAssump>
           <CAssump label="Interest-Only"><FieldInput value={refi.ioYears == null ? 0 : refi.ioYears} onChange={(v) => setRefi('ioYears', v)} suffix="yrs" align="left" /></CAssump>
-          <CAssump label="Refi Cost" hint="% of new loan"><FieldInput value={refi.costPct == null ? 2 : refi.costPct} onChange={(v) => setRefi('costPct', v)} suffix="%" align="left" /></CAssump>
+          <CAssump label="Refi Loan Fees" w={150} hint={uw.refiCostPct && uw.refiCostPct.linked
+              ? <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Linked · quote loan fee</span>
+              : (uw.refiRate && uw.refiRate.quote ? <button type="button" onClick={() => setRefi('costMode', 'linked')} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 10, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font)' }}>Custom · use quote fee</button> : '% of new loan')}>
+            <FieldInput value={uw.refiCostPct ? uw.refiCostPct.pct : (refi.costPct == null ? 2 : refi.costPct)} onChange={(v) => set('refi', { ...refi, costPct: v, costMode: 'custom' })} suffix="%" align="left" />
+          </CAssump>
+          <SizingFields spec={refi} sizing={uw.refiSizing} quote={uw.refiRate && uw.refiRate.quote} onSet={setRefi} />
         </CompactGrid>
         <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(128px, 1fr))', gap: 12 }}>
           <FootStat label={'Refi Value (Yr ' + uw.refiYear + ')'} value={moneyFull(uw.refiValue)} sub="NOI ÷ refi cap" />
-          <FootStat label="New Loan" value={moneyFull(uw.refiProceeds)} accent="var(--accent)" />
+          <FootStat label="New Loan" value={moneyFull(uw.refiProceeds)} accent="var(--accent)" sub={sizingNote(uw.refiSizing)} />
           <FootStat label="Old Loan Payoff" value={moneyFull(uw.refiPayoff)} />
-          <FootStat label="Refi Cost" value={moneyFull(uw.refiCost)} sub={(refi.costPct == null ? 2 : refi.costPct) + '% of loan'} />
+          <FootStat label="Refi Loan Fees" value={moneyFull(uw.refiCost)} sub={(uw.refiCostPct ? uw.refiCostPct.pct : 2) + '% of loan'} />
           <FootStat label="Cash-Out to Equity" value={moneyFull(uw.refiCashOut)} accent={uw.refiCashOut >= 0 ? 'var(--pos)' : 'var(--neg)'} />
           <FootStat tone="lender" label="Refi DSCR" value={uw.refiDSCR == null ? '—' : uw.refiDSCR.toFixed(2) + 'x'} accent={refiLow ? 'var(--neg)' : 'var(--lender)'}
             sub={refiMinD ? (refiLow ? 'below ' : 'lender min ') + refiMinD.toFixed(2) + 'x' : 'refi-yr NOI ÷ new DS'} />
