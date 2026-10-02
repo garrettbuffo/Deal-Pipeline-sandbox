@@ -309,26 +309,20 @@ function windowMetrics(deals, days, endOffsetDays=0){
   };
 }
 
-/* --- Metrics tab: calendar-period toggle (This Month/Quarter/Year), distinct from the trailing-window RANGES above --- */
-const PERIODS = [
-  { value:'month',   label:'This Month' },
-  { value:'quarter', label:'This Quarter' },
-  { value:'year',    label:'This Year' },
-  { value:'all',     label:'All time' },
-];
+/* --- Metrics tab: All time, or since a picked date through today. --- */
+const LS_METRICS_SINCE = 'altus_metrics_since_v1';
 // Underwritten price for a deal (portfolio-aware) — the "UW Price" total.
 const uwPriceOf = (d)=> Array.isArray(d.properties) && d.isPortfolio && d.properties.length>1
   ? d.properties.reduce((s,p)=>s+(Number(p.purchasePrice)||0),0)
   : (Number(d.purchasePrice)||0);
-// Current + previous calendar-period bounds, anchored to the app's TODAY.
-function periodBounds(period){
-  const y = TODAY.getFullYear(), m = TODAY.getMonth();
+// Bounds for "since <date>" through end of today, plus an equal-length window just before it
+// for the deltas. All time = no bounds.
+function periodBounds(period, since){
+  if(period!=='since' || !since) return { start:null, end:null, prevStart:null, prevEnd:null };
+  const start = parseD(since);
   const end = new Date(TODAY.getTime() + DAY); // through end of today
-  if(period==='month')   return { start:new Date(y,m,1), end, prevStart:new Date(y,m-1,1), prevEnd:new Date(y,m,1) };
-  if(period==='quarter'){ const q=Math.floor(m/3)*3;
-                          return { start:new Date(y,q,1), end, prevStart:new Date(y,q-3,1), prevEnd:new Date(y,q,1) }; }
-  if(period==='year')    return { start:new Date(y,0,1), end, prevStart:new Date(y-1,0,1), prevEnd:new Date(y,0,1) };
-  return { start:null, end:null, prevStart:null, prevEnd:null }; // all time
+  const len = Math.max(DAY, end.getTime() - start.getTime());
+  return { start, end, prevStart:new Date(start.getTime() - len), prevEnd:start };
 }
 function inRange(dateStr, start, end){
   if(!dateStr || !start || !end) return false;
@@ -368,13 +362,17 @@ function rangeMetrics(deals, start, end){
 }
 
 function MetricsView({ deals, allDeals, onOpen }){
-  const [period, setPeriod] = useStateV('year');
-  const b = useMemoV(()=> periodBounds(period), [period]);
-  const isAll = period==='all';
+  const saved = (()=>{ try { return JSON.parse(localStorage.getItem(LS_METRICS_SINCE)) || {}; } catch(e) { return {}; } })();
+  const [period, setPeriod] = useStateV(saved.period==='since' ? 'since' : 'all');
+  const [since, setSince] = useStateV(saved.since || (TODAY.getFullYear()+'-01-01'));
+  React.useEffect(()=>{ try { localStorage.setItem(LS_METRICS_SINCE, JSON.stringify({ period, since })); } catch(e) {} }, [period, since]);
+  const b = useMemoV(()=> periodBounds(period, since), [period, since]);
+  const isAll = period!=='since' || !since;
   const cur = useMemoV(()=> rangeMetrics(deals, b.start, b.end), [deals, b]);
   const prev = useMemoV(()=> rangeMetrics(deals, b.prevStart, b.prevEnd), [deals, b]);
   const d = (a,bb)=> isAll ? null : (a-bb);
-  const periodLabel = PERIODS.find(r=>r.value===period).label;
+  const periodLabel = isAll ? 'all time' : 'since ' + fmtDate(since);
+  const priorLabel = isAll ? '' : 'prior ' + Math.round((b.end - b.start) / DAY) + ' days';
 
   // Three mutually-exclusive status buckets over the selected period; uses ALL deals so dead deals are counted.
   const src = allDeals || deals;
@@ -396,18 +394,7 @@ function MetricsView({ deals, allDeals, onOpen }){
   ];
   const fmax = Math.max(...funnel.map(f=>f.value), 1);
 
-  // recent LOI activity list
-  const loiActivity = deals
-    .filter(dl=> dl.dateLOISubmitted && (isAll || inRange(dl.dateLOISubmitted, b.start, b.end)))
-    .sort((a,bb)=> bb.dateLOISubmitted.localeCompare(a.dateLOISubmitted));
 
-  // metro leaderboard — where are we actually submitting LOIs?
-  const metroRank = useMemoV(()=>{
-    const map = {};
-    loiActivity.forEach(dl=>{ const mkt=dl.market||'Unspecified'; map[mkt]=(map[mkt]||0)+1; });
-    return Object.entries(map).sort((a,b)=>b[1]-a[1]);
-  }, [loiActivity]);
-  const metroMax = Math.max(...metroRank.map(([,c])=>c), 1);
 
   return (
     <div className="fade" style={{ padding:'24px 30px 60px', maxWidth:1280, margin:'0 auto' }}>
@@ -415,10 +402,18 @@ function MetricsView({ deals, allDeals, onOpen }){
         <div>
           <h2 style={{ margin:0, fontSize:21, fontWeight:700, color:'var(--ink)' }}>Pipeline Metrics</h2>
           <p style={{ margin:'4px 0 0', fontSize:13.5, color:'var(--muted)' }}>
-            Activity & dollar volume — {isAll ? 'all time' : periodLabel} as of {fmtDate(window.ALTUS_TODAY)}.
+            Activity & dollar volume — {periodLabel} through {fmtDate(window.ALTUS_TODAY)}.
           </p>
         </div>
-        <Seg value={period} onChange={setPeriod} options={PERIODS}/>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <select value={period} onChange={(e)=>setPeriod(e.target.value)} aria-label="Metrics period"
+            style={{ height:34, border:'1px solid var(--line-2)', borderRadius:8, padding:'0 10px', background:'var(--panel)', fontSize:13, color:'var(--ink)', fontFamily:'var(--font)', cursor:'pointer' }}>
+            <option value="all">All time</option>
+            <option value="since">Since…</option>
+          </select>
+          {period==='since' && <input type="date" value={since} max={window.ALTUS_TODAY} onChange={(e)=>setSince(e.target.value)} aria-label="Since date"
+            style={{ height:34, border:'1px solid var(--line-2)', borderRadius:8, padding:'0 10px', background:'var(--panel)', fontSize:13, color:'var(--ink)', fontFamily:'var(--font)' }}/>}
+        </div>
       </div>
 
       {/* Deal activity by status — count + underwritten price per bucket (dead deals included) */}
@@ -446,7 +441,7 @@ function MetricsView({ deals, allDeals, onOpen }){
       {/* activity KPIs */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14 }}>
         <Kpi label="On-Market Deals" value={fmtNum(cur.onMarket)} icon="plus" accent="#6b7a8d"
-             delta={d(cur.onMarket,prev.onMarket)} sub={cur.entered ? fmtPct(cur.onMarket/cur.entered,0)+' of entered' : (isAll?'in pipeline':'vs prior '+periodLabel)}/>
+             delta={d(cur.onMarket,prev.onMarket)} sub={cur.entered ? fmtPct(cur.onMarket/cur.entered,0)+' of entered' : (isAll?'in pipeline':'vs '+priorLabel)}/>
         <Kpi label="Off-Market Deals" value={fmtNum(cur.offMarket)} icon="lock" accent="var(--warn)"
              delta={d(cur.offMarket,prev.offMarket)} sub={cur.entered ? fmtPct(cur.offMarket/cur.entered,0)+' of entered' : 'sourced directly'}/>
         <Kpi label="Total UW Price" value={fmtShort(cur.dollarEntered)} icon="dollar" accent="var(--ink)"
@@ -490,7 +485,7 @@ function MetricsView({ deals, allDeals, onOpen }){
 
       {/* funnel */}
       <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:16, marginTop:16, alignItems:'start' }}>
-        <Card title="Conversion Funnel" right={<span style={{ fontSize:12, color:'var(--muted)' }}>{isAll?'all time':periodLabel}</span>}>
+        <Card title="Conversion Funnel" right={<span style={{ fontSize:12, color:'var(--muted)' }}>{periodLabel}</span>}>
           <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
             {funnel.map((f,i)=>{
               const prevVal = i>0 ? funnel[i-1].value : null;
@@ -515,21 +510,6 @@ function MetricsView({ deals, allDeals, onOpen }){
           </div>
         </Card>
 
-        <Card title="LOIs by Metro" right={<span style={{ fontSize:12, color:'var(--muted)' }}>{loiActivity.length} in range</span>}>
-          {metroRank.length===0 ? (
-            <div style={{ padding:'40px 18px', textAlign:'center', color:'var(--muted)', fontSize:13 }}>No LOI activity in this window.</div>
-          ) : (
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))', gap:14 }}>
-              {metroRank.map(([mkt,count])=>(
-                <div key={mkt} style={{ border:'1px solid var(--line)', borderRadius:10, padding:'12px 14px',
-                  display:'flex', alignItems:'baseline', justifyContent:'space-between' }}>
-                  <span className="clip" style={{ fontSize:14, fontWeight:600, color:'var(--ink)' }}>{mkt}</span>
-                  <span className="num" style={{ fontSize:18, fontWeight:700, color:'var(--slate)' }}>{count}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
       </div>
     </div>
   );

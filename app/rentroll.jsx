@@ -5,7 +5,7 @@
 // Units come from deal.rentRoll.units: [{ id, type, sf, market, rent, occ, leaseStart }].
 const { useState: useStateR, useMemo: useMemoR, useRef: useRefR, useEffect: useEffectR } = React;
 
-const rMoney = (v) => (v == null || isNaN(v)) ? '—' : '$' + Math.round(v).toLocaleString('en-US');
+const rrMoney = (v) => (v == null || isNaN(v)) ? '—' : '$' + Math.round(v).toLocaleString('en-US');
 const rMoney2 = (v) => (v == null || isNaN(v)) ? '—' : '$' + Number(v).toFixed(2);
 const rPct = (v, d = 1) => (v == null || isNaN(v)) ? '—' : (v * 100).toFixed(d) + '%';
 const rAvg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
@@ -224,12 +224,12 @@ function RRIncomePanel({ deal, set, pr, linked }) {
           sub={pr.units + ' on the rent roll'} />
         <div style={{ minWidth: 150 }}>
           <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: 5 }}>Gross Potential Rent</div>
-          <div className="num" style={{ height: 34, display: 'flex', alignItems: 'center', fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>{rMoney(deal.gprAnnual)}</div>
-          <div style={{ fontSize: 10.5, marginTop: 4, color: 'var(--faint)' }}>{rMoney(pr.avgMkt)} avg / unit / mo{k !== 1 ? ' · scaled to ' + deal.units + ' units' : ''}</div>
+          <div className="num" style={{ height: 34, display: 'flex', alignItems: 'center', fontSize: 16, fontWeight: 700, color: 'var(--ink)' }}>{rrMoney(deal.gprAnnual)}</div>
+          <div style={{ fontSize: 10.5, marginTop: 4, color: 'var(--faint)' }}>{rrMoney(pr.avgMkt)} avg / unit / mo{k !== 1 ? ' · scaled to ' + deal.units + ' units' : ''}</div>
         </div>
-        <RROverrideField deal={deal} set={set} field="physVacLoss" label="Physical Vacancy" prefix="$" derived={rMoney(pr.physVacLoss * k)}
+        <RROverrideField deal={deal} set={set} field="physVacLoss" label="Physical Vacancy" prefix="$" derived={rrMoney(pr.physVacLoss * k)}
           sub={(pr.units - Math.round(pr.occ * pr.units)) + ' vacant at in-place rent'} />
-        <RROverrideField deal={deal} set={set} field="lossToLease" label="Loss to Lease" prefix="$" derived={rMoney(pr.lossToLease * k)}
+        <RROverrideField deal={deal} set={set} field="lossToLease" label="Loss to Lease" prefix="$" derived={rrMoney(pr.lossToLease * k)}
           sub={pr.ltlPct == null ? '' : rPct(pr.ltlPct) + ' · market vs avg in-place'} />
       </div>
       : <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Full UW income is entered by hand, not from this rent roll.</div>}
@@ -288,14 +288,14 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
       <div style={cellR}>{rPct(r.units / (T.units || 1), 0)}</div>
       <div style={cellR}>{r.avgSf ? Math.round(r.avgSf).toLocaleString() : '—'}</div>
       <div style={{ ...cellR, color: r.units && r.occUnits / r.units < 0.9 ? 'var(--warn)' : undefined }}>{rPct(r.units ? r.occUnits / r.units : null)}</div>
-      <div style={{ ...cellR, color: 'var(--ink)', fontWeight: 600 }}>{rMoney(r.avgIn)}</div>
+      <div style={{ ...cellR, color: 'var(--ink)', fontWeight: 600 }}>{rrMoney(r.avgIn)}</div>
       <div style={{ ...cellR, color: 'var(--muted)' }}>{rMoney2(r.psf)}</div>
-      <div style={{ ...cellR, color: 'var(--accent-2)', fontWeight: 600 }}>{rMoney(r.avgMk)}</div>
+      <div style={{ ...cellR, color: 'var(--accent-2)', fontWeight: 600 }}>{rrMoney(r.avgMk)}</div>
       <div style={{ ...cellR, color: 'var(--muted)' }}>{rMoney2(r.mpsf)}</div>
-      <div style={{ ...cellR, background: 'var(--panel-3)' }}>{rMoney(r.min)}</div>
-      <div style={{ ...cellR, background: 'var(--panel-3)', fontWeight: 600 }}>{rMoney(r.max)}</div>
-      <div style={{ ...cellR, background: 'var(--panel-3)', fontWeight: 600 }}>{rMoney(r.top25)}</div>
-      <div style={{ ...cellR, background: 'var(--panel-3)' }}>{rMoney(r.last3)}</div>
+      <div style={{ ...cellR, background: 'var(--panel-3)' }}>{rrMoney(r.min)}</div>
+      <div style={{ ...cellR, background: 'var(--panel-3)', fontWeight: 600 }}>{rrMoney(r.max)}</div>
+      <div style={{ ...cellR, background: 'var(--panel-3)', fontWeight: 600 }}>{rrMoney(r.top25)}</div>
+      <div style={{ ...cellR, background: 'var(--panel-3)' }}>{rrMoney(r.last3)}</div>
     </div>);
 
   const stat = (label, value, sub, color) => (
@@ -318,10 +318,10 @@ function RentRollTab({ deal, set, onRRUpload, rrData }) {
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
           {stat('Physical Occupancy', rPct(T.units ? T.occUnits / T.units : null), T.occUnits + ' of ' + T.units + ' units')}
-          {stat('Avg In-Place', rMoney(T.avgIn), rMoney2(T.psf) + ' / SF')}
-          {stat('Avg Market (roll)', rMoney(T.avgMk), rMoney2(T.mpsf) + ' / SF', 'var(--accent-2)')}
-          {stat('Top 25% In-Place', rMoney(T.top25), T.avgIn ? '+' + rPct(T.top25 / T.avgIn - 1) + ' over avg in-place' : null)}
-          {stat('UW Market', rMoney(pr && pr.avgMkt), pr && pr.ltlPct != null ? rPct(pr.ltlPct) + ' loss to lease' : null, 'var(--pos)')}
+          {stat('Avg In-Place', rrMoney(T.avgIn), rMoney2(T.psf) + ' / SF')}
+          {stat('Avg Market (roll)', rrMoney(T.avgMk), rMoney2(T.mpsf) + ' / SF', 'var(--accent-2)')}
+          {stat('Top 25% In-Place', rrMoney(T.top25), T.avgIn ? '+' + rPct(T.top25 / T.avgIn - 1) + ' over avg in-place' : null)}
+          {stat('UW Market', rrMoney(pr && pr.avgMkt), pr && pr.ltlPct != null ? rPct(pr.ltlPct) + ' loss to lease' : null, 'var(--pos)')}
         </div>
 
         <div style={{ overflowX: 'auto', marginTop: 16 }}>

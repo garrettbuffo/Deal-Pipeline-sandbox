@@ -247,7 +247,7 @@ function TypeTag({ type }){
   );
 }
 function Avatar({ name, size=26 }){
-  const colors = { Will:'#2f6df0', Garrett:'#0f8a4d' };
+  const colors = { Fisher:'#2f6df0', Garrett:'#0f8a4d' };
   return (
     <span title={name} style={{ width:size, height:size, borderRadius:999, flex:'none',
       background:colors[name]||'#7a8a9c', color:'#fff', fontSize:size*0.42, fontWeight:600,
@@ -356,9 +356,9 @@ function Card({ title, right, children, pad=true, style }){
   );
 }
 
-/* Team assignee multi-select — Will / Garrett / Andy. Compact avatar chips + popover. */
-const ASSIGNEES = ['Will', 'Garrett', 'Andy'];
-const ASSIGNEE_COLOR = { Will: '#2f6df0', Garrett: '#0f8a4d', Andy: '#b8651b' };
+/* Team assignee multi-select — Fisher / Garrett / Andy. Compact avatar chips + popover. */
+const ASSIGNEES = ['Fisher', 'Garrett', 'Andy'];
+const ASSIGNEE_COLOR = { Fisher: '#2f6df0', Garrett: '#0f8a4d', Andy: '#b8651b' };
 function AssigneePicker({ value, onChange, size = 24 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);

@@ -1,5 +1,5 @@
-// app/returns.jsx — Returns tab: deal-level returns, LP/GP waterfall returns, and a
-// weak / base / best scenario comparison. Loaded after uwsections.jsx.
+// app/returns.jsx — Returns tab: deal-level returns and LP/GP waterfall returns.
+// Loaded after uwsections.jsx.
 const { useState: useSR } = React;
 const RC = window; // shared primitives
 
@@ -61,65 +61,11 @@ function YearTable({ hold, columns }) {
   );
 }
 
-/* ───────────── Scenario table ───────────── */
-function ScenarioTable({ scenarios }) {
-  const cols = scenarios; // [{key,label,tint,...}]
-  const grid = `220px repeat(${cols.length}, 1fr)`;
-  const Row = ({ label, hint, get, strong, top }) => (
-    <div style={{ display: 'grid', gridTemplateColumns: grid, alignItems: 'center', borderTop: top ? '2px solid var(--line-2)' : '1px solid var(--line)' }}>
-      <div style={{ padding: '11px 16px' }}>
-        <div style={{ fontSize: 12.5, fontWeight: strong ? 600 : 400, color: 'var(--ink)' }}>{label}</div>
-        {hint && <div style={{ fontSize: 10.5, color: 'var(--faint)' }}>{hint}</div>}
-      </div>
-      {cols.map((s) => (
-        <div key={s.key} className="num" style={{ padding: '11px 16px', textAlign: 'right', fontSize: strong ? 15 : 13, fontWeight: strong ? 700 : 500, color: strong ? (s.tint || 'var(--ink)') : 'var(--slate)' }}>{get(s)}</div>
-      ))}
-    </div>
-  );
-  return (
-    <div style={{ overflow: 'hidden', borderRadius: 9, border: '1px solid var(--line)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: grid, background: 'var(--panel-3)' }}>
-        <div style={{ padding: '12px 16px', fontSize: 10.5, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>Scenario</div>
-        {cols.map((s) => (
-          <div key={s.key} style={{ padding: '12px 16px', textAlign: 'right' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: s.tint || 'var(--ink)' }}>{s.label}</div>
-            <div style={{ fontSize: 10.5, color: 'var(--faint)', marginTop: 2 }}>{s.assume}</div>
-          </div>
-        ))}
-      </div>
-      <Row label="Deal IRR" strong get={(s) => s.res.dealIRR == null ? '—' : rPct1(s.res.dealIRR)} />
-      <Row label="Avg Deal Yield" hint="mean annual cash-on-cash" get={(s) => rPct1(s.res.avgDealYield)} />
-      <Row label="Equity Multiple" get={(s) => rX(s.res.equityMultiple)} />
-      <Row top label="LP IRR" strong get={(s) => s.res.lpIRR == null ? '—' : rPct1(s.res.lpIRR)} />
-      <Row label="Avg LP Yield" hint="mean annual LP cash yield" get={(s) => rPct1(s.res.avgLpYield)} />
-      <Row label="LP Equity Multiple" get={(s) => rX(s.res.lpMultiple)} />
-      <Row label="Total GP Promote" get={(s) => rMoney(s.res.gpPromote)} />
-    </div>
-  );
-}
-
 /* ───────────── Returns tab ───────────── */
 function ReturnsTab({ deal, set }) {
   const uw = RC.computeUW(deal);
   const lp = RC.computeLP(uw, { pref: deal.lpPref, split: deal.lpSplit });
   const hold = uw.hold;
-
-  // scenarios — exit cap defaults to 6.0% when none is set. All cases run on the
-  // Bridge-to-HUD financing (70% LTC bridge + HUD takeout refi) so they're comparable;
-  // only the growth / stabilization / exit assumptions vary between cases.
-  const baseExit = (deal.exitCap == null || deal.exitCap === '') ? 6 : Number(deal.exitCap);
-  const bridgeToHUD = {
-    acqFin: { mode: 'new', scenario: 'Bridge to HUD', new: { basis: 'LTC', pct: 70, rate: 6.25, amYears: 30, ioYears: 3 } },
-    refi: { enabled: true, year: 3, cap: 6, ltv: 80, rate: 6, amYears: 35, ioYears: 0, costPct: 2 },
-  };
-  const weak = RC.computeScenario(deal, { ...bridgeToHUD, gprGrowth: 1, opexGrowth: 1, stabEconVac: RC.inPlaceVacPct(deal), stabYear: 1 });
-  const base = RC.computeScenario(deal, { ...bridgeToHUD });
-  const best = RC.computeScenario(deal, { ...bridgeToHUD, gprGrowth: 4, opexGrowth: 2, exitCap: baseExit - 0.25 });
-  const scenarios = [
-    { key: 'weak', label: 'Weak', tint: 'var(--neg)', assume: 'Bridge→HUD · EGI +1% / OpEx +1% · no stabilization', res: weak },
-    { key: 'base', label: 'Base', tint: 'var(--accent)', assume: 'Bridge→HUD at purchase · current growth/exit', res: base },
-    { key: 'best', label: 'Best', tint: 'var(--pos)', assume: 'Bridge→HUD · rent +4% / exp +2% · exit −25 bps', res: best },
-  ];
 
   const noExit = deal.exitCap == null || deal.exitCap === '';
   const ready = RC.hasUWInputs ? RC.hasUWInputs(deal) : (Number(deal.gprAnnual) > 0);
@@ -191,13 +137,6 @@ function ReturnsTab({ deal, set }) {
         ]} />
       </RC.Card>
 
-      {/* Scenarios */}
-      <RC.Card>
-        <RC.SectionHead icon="pulse" title="Scenario Analysis" desc="Average hold-period yield and IRR at the deal and LP level across three cases." />
-        <div style={{ marginTop: 14 }}>
-          <ScenarioTable scenarios={scenarios} />
-        </div>
-      </RC.Card>
     </div>
   );
 }

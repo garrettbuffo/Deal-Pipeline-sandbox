@@ -84,6 +84,39 @@ function firmKey(f) {
     .replace(/\s+/g, ' ').trim();
   return FIRM_ALIAS[k] || k || 'no firm';
 }
+// Markets a contact covers: "Dallas, TX; Austin, TX" (commas stay inside "City, ST").
+function marketsOf(c) {
+  return String((c && c.markets) || '').split(/;|\||\/|\n|\s+&\s+|\s+and\s+/i).map((x) => x.trim()).filter(Boolean);
+}
+const marketKey = (m) => nm(m).replace(/[.]/g, '').replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ');
+function stateOf(m) {
+  const t = String(m || '').trim();
+  const x = t.match(/,\s*([A-Za-z]{2})\.?$/);
+  if (x) return x[1].toUpperCase();
+  return /^[A-Za-z]{2}$/.test(t) ? t.toUpperCase() : null;
+}
+// "123 Main St, Suite 4, dallas, tx 75201" -> "Dallas, TX"
+function cityST(v) {
+  const t = String(v || '').replace(/\s+/g, ' ').trim();
+  const all = [...t.matchAll(/([A-Za-z][A-Za-z .'-]*?),\s*([A-Za-z]{2})\b\.?(?:\s+\d{5}(?:-\d{4})?)?/g)];
+  if (!all.length) return t.length <= 40 && !/\d/.test(t) ? t : '';
+  const [, city, st] = all[all.length - 1];
+  const c = city.trim().split(' ').filter((w) => !/^(suite|ste|floor|fl|#)/i.test(w)).slice(-3).join(' ');
+  return c.replace(/\b\w/g, (ch) => ch.toUpperCase()).replace(/\B\w+/g, (w) => w.toLowerCase()) + ', ' + st.toUpperCase();
+}
+// Market fields for a broker contact from an OM parse. Office = the broker's own office city if
+// printed, else the brokerage's office on the OM. Markets follow the office (or, with no office on
+// the OM, the deal's city) unless the user typed or imported their own, which is never overwritten.
+function netContactMarket(pc, parsed, existing) {
+  const office = cityST((pc && pc.office) || (parsed && parsed.brokerOffice)) || (existing && existing.office) || '';
+  const out = office ? { office } : {};
+  const manual = existing && existing.markets && existing.marketsSource !== 'auto';
+  if (!manual) {
+    const auto = office || cityST(parsed && parsed.market) || (parsed && parsed.market) || '';
+    if (auto) { out.markets = auto; out.marketsSource = 'auto'; }
+  }
+  return out;
+}
 function dealFunnel(ds) {
   return { sent: ds.length, loi: ds.filter((d) => LOI_PLUS.includes(d.stage)).length,
     contract: ds.filter((d) => d.stage === 'Under Contract' || d.stage === 'Purchased').length, closed: ds.filter((d) => d.stage === 'Purchased').length };
@@ -324,9 +357,12 @@ function NetContactDrawer({ contact, deals, st, timeline, contactsById, onClose,
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {field('name', 'Name')}{field('firm', 'Firm')}{field('title', 'Title')}{field('phone', 'Phone', 'tel')}
-            <div style={{ gridColumn: '1/-1' }}>{field('email', 'Email', 'email')}</div>
-            {field('markets', 'Markets covered')}
+            {field('name', 'Name')}{field('firm', 'Firm')}{field('title', 'Title')}{field('phone', 'Phone', 'tel')}{field('office', 'Office (City, ST)')}
+            {field('email', 'Email', 'email')}
+            <label style={{ display: 'block' }}><span style={N_LABEL}>Markets covered</span>
+              <input defaultValue={contact.markets || ''} key={contact.id + 'mk' + (contact.markets || '')} placeholder="Dallas, TX; Austin, TX"
+                onBlur={(e) => { if (e.target.value !== (contact.markets || '')) onPatch(contact.id, { markets: e.target.value, marketsSource: 'manual' }); }} style={N_INPUT} />
+              <span style={{ fontSize: 10.5, color: 'var(--faint)' }}>{contact.marketsSource === 'auto' ? 'Filled from an OM' + (contact.office ? ' (office: ' + contact.office + ')' : '') + ' · edit to override' : 'Separate markets with ;'}</span></label>
             <label style={{ display: 'block' }}><span style={N_LABEL}>Tags</span>
               <input defaultValue={(contact.tags || []).join(', ')} key={contact.id + 'tags'} placeholder="e.g. Texas, value-add, HUD"
                 onBlur={(e) => set('tags', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))} style={N_INPUT} /></label>
@@ -452,30 +488,49 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
 
   const exportContacts = () => window.downloadCSV(shown.map((c) => {
     const s = rs[c.id], f = dealFunnel(dealsBy[c.id] || []);
-    return { Name: c.name || '', Firm: c.firm || '', Title: c.title || '', Type: (typeMeta(c.type) || {}).label || '', Tier: c.tier || '', Email: c.email || '', Phone: c.phone || '',
-      Markets: c.markets || '', Tags: (c.tags || []).join('; '), 'Last Touch': s && s.last ? isoDay(s.last) : '', 'Next Follow-Up': s && s.due ? isoDay(s.due) : '',
+    return { ID: c.id, Name: c.name || '', Firm: c.firm || '', Title: c.title || '', Type: (typeMeta(c.type) || {}).label || '', Tier: c.tier || '', Email: c.email || '', Phone: c.phone || '',
+      Office: c.office || '', Markets: c.markets || '', Tags: (c.tags || []).join('; '), 'Last Touch': s && s.last ? isoDay(s.last) : '', 'Next Follow-Up': s && s.due ? isoDay(s.due) : '',
       'Deals Sent': f.sent, LOIs: f.loi, Closed: f.closed, Notes: c.notes || '' };
   }), 'altus-network.csv');
+  // Import adds new contacts and updates existing ones (matched by ID, then email, then name + firm),
+  // so a Network export can be edited in Excel and uploaded again. Blank cells leave a field as is.
   const importCSV = (file) => {
     const r = new FileReader();
     r.onload = (e) => {
       const rows = netParseCSV(String(e.target.result || ''));
-      const seen = new Set(contacts.map((c) => nm(c.email)).filter(Boolean));
-      let n = 0;
+      const byId = {}, byEmail = {}, byNameFirm = {};
+      contacts.forEach((c) => { byId[c.id] = c; if (c.email) byEmail[nm(c.email)] = c; if (c.name) byNameFirm[nm(c.name) + '|' + firmKey(c.firm)] = c; });
+      let added = 0, updated = 0, skipped = 0;
       rows.forEach((row) => {
-        const name = row['name'] || row['contact name'] || [row['first name'], row['last name']].filter(Boolean).join(' ');
-        const email = row['email'] || row['e-mail address'] || row['email address'] || '';
-        if (!name && !email) return;
-        if (email && seen.has(nm(email))) return;
-        seen.add(nm(email));
-        const tier = String(row['tier'] || '').toUpperCase();
-        onAddContact({ id: uid('c-'), name, email, firm: row['firm'] || row['company'] || row['company name'] || '', title: row['title'] || row['job title'] || '',
-          phone: row['phone'] || row['business phone'] || row['mobile phone'] || '', markets: row['markets'] || row['markets covered'] || '',
-          type: typeFromText(row['type'] || row['category'] || row['title'] || row['job title']), tier: NET_TIERS[tier] ? tier : null,
-          tags: String(row['tags'] || '').split(/[;,]/).map((t) => t.trim()).filter(Boolean), notes: row['notes'] || '', dealIds: [], dateAdded: todayISO(), lastActivity: row['last touch'] || row['last activity'] || '' });
-        n++;
+        const get = (...ks) => { for (const k of ks) if (row[k] != null && row[k] !== '') return row[k]; return ''; };
+        const name = get('name', 'contact name') || [row['first name'], row['last name']].filter(Boolean).join(' ');
+        const email = get('email', 'e-mail address', 'email address');
+        const firm = get('firm', 'company', 'company name');
+        if (!name && !email) { skipped++; return; }
+        const typeTxt = get('type', 'category');
+        const type = typeTxt ? ((NET_TYPES.find((t) => nm(t.label) === nm(typeTxt) || nm(t.short) === nm(typeTxt) || t.key === nm(typeTxt)) || {}).key || typeFromText(typeTxt)) : null;
+        const tierTxt = String(get('tier')).toUpperCase();
+        const tags = get('tags') ? String(get('tags')).split(/[;,]/).map((t) => t.trim()).filter(Boolean) : null;
+        const fields = { name, email, firm, title: get('title', 'job title'), phone: get('phone', 'business phone', 'mobile phone'), office: get('office'), notes: get('notes') };
+        const ch = {};
+        Object.keys(fields).forEach((k) => { if (fields[k]) ch[k] = fields[k]; });
+        const mk = get('markets', 'markets covered');
+        if (mk) { ch.markets = mk; ch.marketsSource = 'manual'; }
+        if (type) ch.type = type;
+        if (NET_TIERS[tierTxt]) ch.tier = tierTxt;
+        if (tags) ch.tags = tags;
+        const hit = byId[get('id')] || (email && byEmail[nm(email)]) || (name && byNameFirm[nm(name) + '|' + firmKey(firm)]);
+        if (hit) {
+          if (Object.keys(ch).some((k) => JSON.stringify(ch[k]) !== JSON.stringify(hit[k]))) { onPatchContact(hit.id, ch); updated++; }
+          return;
+        }
+        const nc = { id: uid('c-'), name: '', email: '', firm: '', title: '', phone: '', markets: '', type: null, tier: null, tags: [], notes: '', ...ch,
+          dealIds: [], dateAdded: todayISO(), lastActivity: get('last touch', 'last activity') };
+        onAddContact(nc);
+        if (nc.email) byEmail[nm(nc.email)] = nc;
+        added++;
       });
-      setMsg('Imported ' + n + ' new contact' + (n === 1 ? '' : 's') + (rows.length - n ? ' · ' + (rows.length - n) + ' skipped (duplicate email or blank)' : ''));
+      setMsg('Import: ' + updated + ' updated · ' + added + ' added' + (skipped ? ' · ' + skipped + ' blank rows skipped' : ''));
     };
     r.readAsText(file);
   };
@@ -588,7 +643,39 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
       Type: a.type, 'Property Name': a.dealName || a.propertyName || '', Metro: a.market || '', Notes: a.note || '', Date: a.ts ? new Date(a.ts).toLocaleDateString() : '' };
   }), 'altus-network-activity.csv');
 
-  const TABS = [{ k: 'followups', l: 'Follow-ups', n: overdue.length + dueWeek.length }, { k: 'contacts', l: 'Contacts', n: contacts.length }, { k: 'firms', l: 'Firms' }, { k: 'activity', l: 'Activity' }];
+  // markets → firms → people
+  const [mktBy, setMktBy] = useStateN('market');
+  const [openMkt, setOpenMkt] = useStateN(null);
+  const [openMktFirm, setOpenMktFirm] = useStateN(null);
+  const markets = useMemoN(() => {
+    const m = {};
+    shown.forEach((c) => {
+      let keys = marketsOf(c);
+      if (mktBy === 'state') keys = [...new Set(keys.map((x) => stateOf(x)).filter(Boolean))];
+      if (!keys.length) keys = [''];
+      keys.forEach((label) => {
+        const k = label ? marketKey(label) : '~none';
+        const g = m[k] || (m[k] = { key: k, names: {}, firms: {}, contacts: new Set(), deals: new Map(), last: null });
+        if (label) g.names[label] = (g.names[label] || 0) + 1;
+        g.contacts.add(c.id);
+        const fk = firmKey(c.firm);
+        const f = g.firms[fk] || (g.firms[fk] = { key: fk, names: {}, people: [] });
+        const fl = (c.firm || 'No firm').trim();
+        f.names[fl] = (f.names[fl] || 0) + 1;
+        f.people.push(c);
+        (dealsBy[c.id] || []).forEach((d) => g.deals.set(d.id, d));
+        const l = rs[c.id] && rs[c.id].last;
+        if (l && (!g.last || l > g.last)) g.last = l;
+      });
+    });
+    const pick = (names, dflt) => Object.keys(names).sort((a, b) => names[b] - names[a] || a.length - b.length)[0] || dflt;
+    return Object.values(m).map((g) => ({ ...g, label: g.key === '~none' ? 'No market set' : pick(g.names, g.key),
+      firmList: Object.values(g.firms).map((f) => ({ ...f, label: pick(f.names, 'No firm') })).sort((a, b) => b.people.length - a.people.length),
+      funnel: dealFunnel([...g.deals.values()]) }))
+      .sort((a, b) => (a.key === '~none') - (b.key === '~none') || b.contacts.size - a.contacts.size);
+  }, [shown, dealsBy, rs, mktBy]);
+
+  const TABS = [{ k: 'followups', l: 'Follow-ups', n: overdue.length + dueWeek.length }, { k: 'contacts', l: 'Contacts', n: contacts.length }, { k: 'markets', l: 'Markets' }, { k: 'firms', l: 'Firms' }, { k: 'activity', l: 'Activity' }];
   const open = openId ? contactsById[openId] : null;
 
   return (
@@ -601,7 +688,7 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" style={N_PRIMARY} onClick={() => setAdding(true)}><Icon name="plus" size={13} />Add contact</button>
           <input ref={importRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) importCSV(f); e.target.value = ''; }} />
-          <button type="button" style={N_BTN} onClick={() => importRef.current && importRef.current.click()} title="CSV with Name, Firm, Email, Phone, Type, Tier, Markets (an Outlook contacts export works)"><Icon name="upload" size={13} />Import CSV</button>
+          <button type="button" style={N_BTN} onClick={() => importRef.current && importRef.current.click()} title="Upload an edited Network export to update contacts, or any CSV with Name, Firm, Email, Phone, Type, Tier, Markets, Tags (an Outlook contacts export works)"><Icon name="upload" size={13} />Import CSV</button>
           <button type="button" style={N_BTN} onClick={tab === 'activity' ? exportActivity : exportContacts}><Icon name="download" size={13} />Export {tab === 'activity' ? 'activity' : 'contacts'}</button>
         </div>
       </div>
@@ -695,6 +782,61 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
         </div>
       </div>}
 
+      {tab === 'markets' && <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line)' }}>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>Group by</span>
+          <NetSeg value={mktBy} onChange={(v) => { setMktBy(v); setOpenMkt(null); setOpenMktFirm(null); }} options={[{ value: 'market', label: 'Market' }, { value: 'state', label: 'State' }]} />
+          <span style={{ fontSize: 11.5, color: 'var(--faint)', marginLeft: 'auto' }}>A contact covering several markets shows under each.</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 80px 70px 80px 70px 70px 110px', background: 'var(--panel-2)', borderBottom: '1px solid var(--line)' }}>
+          {[mktBy === 'state' ? 'State' : 'Market', 'Contacts', 'Firms', 'Deals', 'LOIs', 'Closed', 'Last touch'].map((h) =>
+            <div key={h} style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>{h}</div>)}
+        </div>
+        {markets.map((g) => {
+          const isOpen = openMkt === g.key;
+          return (
+            <div key={g.key} style={{ borderTop: '1px solid var(--line)' }}>
+              <div role="button" tabIndex={0} onClick={() => { setOpenMkt(isOpen ? null : g.key); setOpenMktFirm(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { setOpenMkt(isOpen ? null : g.key); setOpenMktFirm(null); } }}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 80px 70px 80px 70px 70px 110px', alignItems: 'center', cursor: 'pointer', fontSize: 12.5, background: isOpen ? 'var(--panel-2)' : undefined }}>
+                <div style={{ padding: '10px', fontWeight: 600, color: g.key === '~none' ? 'var(--muted)' : 'var(--ink)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ display: 'inline-block', transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform .12s', color: 'var(--muted)', fontSize: 9 }}>▶</span>{g.label}</div>
+                <div className="num" style={{ padding: '0 10px' }}>{g.contacts.size}</div>
+                <div className="num" style={{ padding: '0 10px' }}>{g.firmList.length}</div>
+                <div className="num" style={{ padding: '0 10px' }}>{g.funnel.sent || '—'}</div>
+                <div className="num" style={{ padding: '0 10px', color: g.funnel.loi ? 'var(--warn)' : undefined }}>{g.funnel.loi || '—'}</div>
+                <div className="num" style={{ padding: '0 10px', color: g.funnel.closed ? 'var(--pos)' : undefined }}>{g.funnel.closed || '—'}</div>
+                <div style={{ padding: '0 10px', color: 'var(--slate)' }}>{g.last ? daysFrom(g.last) + 'd ago' : 'never'}</div>
+              </div>
+              {isOpen && <div style={{ padding: '2px 0 8px' }}>
+                {g.firmList.map((f) => {
+                  const fOpen = openMktFirm === f.key;
+                  return (
+                    <div key={f.key}>
+                      <div role="button" tabIndex={0} onClick={() => setOpenMktFirm(fOpen ? null : f.key)} onKeyDown={(e) => { if (e.key === 'Enter') setOpenMktFirm(fOpen ? null : f.key); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px 7px 32px', cursor: 'pointer', fontSize: 12.5 }}>
+                        <span style={{ display: 'inline-block', transform: fOpen ? 'rotate(90deg)' : 'none', transition: 'transform .12s', color: 'var(--muted)', fontSize: 9 }}>▶</span>
+                        <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{f.label}</span>
+                        <span style={{ color: 'var(--muted)' }}>{f.people.length} {f.people.length === 1 ? 'person' : 'people'}</span>
+                        <span style={{ display: 'flex', gap: 4 }}>{[...new Set(f.people.map((c) => c.type).filter(Boolean))].map((t) => <TypeChip key={t} type={t} />)}</span>
+                      </div>
+                      {fOpen && <div style={{ padding: '2px 10px 8px 54px', display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {f.people.map((c) => (
+                          <button key={c.id} type="button" onClick={() => setOpenId(c.id)} style={{ display: 'flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 8, padding: '6px 10px', background: 'var(--panel)', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+                            <NetAvatar name={c.name} size={24} />
+                            <span style={{ textAlign: 'left' }}><span style={{ display: 'block', fontSize: 12.5, color: 'var(--ink)', fontWeight: 600 }}>{c.name || c.email}</span>
+                              <span style={{ display: 'block', fontSize: 10.5, color: 'var(--muted)' }}>{c.title || ''}</span></span>
+                            <TierChip tier={c.tier} />
+                            <span style={{ fontSize: 11, color: 'var(--muted)' }}><DueText st={rs[c.id]} /></span>
+                          </button>))}
+                      </div>}
+                    </div>);
+                })}
+              </div>}
+            </div>);
+        })}
+        {!markets.length && <div style={{ padding: 18, fontSize: 13, color: 'var(--muted)' }}>No contacts match.</div>}
+      </div>}
+
       {tab === 'firms' && <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 90px minmax(140px,1.2fr) 80px 70px 80px 70px 110px', background: 'var(--panel-2)', borderBottom: '1px solid var(--line)' }}>
           {['Firm', 'Contacts', 'Coverage', 'Deals', 'LOIs', 'Contract', 'Closed', 'Last touch'].map((h) =>
@@ -737,4 +879,4 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
     </div>);
 }
 
-Object.assign(window, { NetworkView, AltusActivities, NET_TYPES, NET_TIERS });
+Object.assign(window, { NetworkView, AltusActivities, NET_TYPES, NET_TIERS, netContactMarket, cityST });

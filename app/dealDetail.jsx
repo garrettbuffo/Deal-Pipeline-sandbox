@@ -709,8 +709,7 @@ function DetailTabs({ tab, setTab, showProperties }) {
   { key: 'fulluw', label: 'Full UW', icon: 'calc' },
   ...(window.RentRollTab ? [{ key: 'rentroll', label: 'Rent Roll', icon: 'table' }] : []),
   { key: 'returns', label: 'Returns', icon: 'chart' },
-  { key: 'location', label: 'Location', icon: 'search' },
-  { key: 'notes', label: 'Notes', icon: 'note' }];
+  { key: 'location', label: 'Location', icon: 'search' }];
 
   return (
     <div style={{ display: 'flex', gap: 4, padding: '0 28px', borderTop: '1px solid var(--line)' }}>
@@ -1367,12 +1366,6 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
         <LocationView deal={deal} set={set} />
         }
 
-        {/* ===== NOTES ===== */}
-        {tab === 'notes' &&
-        <PanelCard title="Notes" hint="UW thoughts, broker feedback, pricing guidance">
-            <NotesEditor value={deal.notes} onChange={(v) => set('notes', v)} minHeight={360} />
-          </PanelCard>
-        }
 
       </div>
     </div>);

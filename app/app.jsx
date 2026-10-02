@@ -589,9 +589,6 @@ const PIPE_COLS = [
   { key: 'assignee',      label: 'Assignee',      defW: 116, min: 92, sortable: true },
   { key: 'askPrice',      label: 'Ask',           defW: 100, min: 78,  sortable: true, align: 'right' },
   { key: 'purchasePrice', label: 'UW Price',      defW: 100, min: 78,  sortable: true, align: 'right' },
-  { key: 'stabilizedCap', label: 'Stab. Cap',     defW: 92,  min: 76,  sortable: true, align: 'right' },
-  { key: 'dealIRR',       label: 'Deal IRR',      defW: 92,  min: 72,  sortable: true, align: 'right' },
-  { key: 'avgYield',      label: 'Avg Yield',     defW: 96,  min: 76,  sortable: true, align: 'right' },
   { key: 'cfoDate',       label: 'CFO Date',      defW: 116, min: 92,  sortable: true },
   { key: 'lastActivity',  label: 'Last Activity', defW: 124, min: 100, sortable: true },
   { key: 'files',         label: 'Files',         defW: 196, min: 150, sortable: false, align: 'center' },
@@ -851,10 +848,6 @@ function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onRe
 
         {/* Rows */}
         {rows.map((d, i) => {
-          const m = computeMetrics(d);
-          const caps = window.displayCaps ? window.displayCaps(d) : { goingIn: m.goingInCap, stab: m.stabilizedCap };
-          const uwr = computeUW(d);
-          const showRet = window.hasUWInputs ? window.hasUWInputs(d) : false;
           const meta = STAGE_META[d.stage] || STAGE_META['New Deal'];
           const isSel = selSet.has(d.id);
           const isDragging = dragId === d.id;
@@ -924,24 +917,6 @@ function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onRe
 
               {/* UW Price */}
               <div className="num" style={{ padding: '8px 7px', fontSize: 13, fontWeight: 500, color: 'var(--slate)', textAlign: 'right' }}>{d.purchasePrice ? fmtShort(d.purchasePrice) : '—'}</div>
-
-              {/* Stab Cap */}
-              <div className="num" style={{ padding: '8px 7px', fontSize: 13, fontWeight: 500,
-                color: caps.stab > 0.001 ? 'var(--pos)' : 'var(--faint)', textAlign: 'right' }}>
-                {caps.stab > 0.001 ? fmtPct(caps.stab, 1) : '—'}
-              </div>
-
-              {/* Deal IRR — only once Income & Economic Vacancy is filled (matches deal page) */}
-              <div className="num" style={{ padding: '8px 7px', fontSize: 13, fontWeight: 600,
-                color: showRet && uwr.irr != null ? 'var(--accent-2)' : 'var(--faint)', textAlign: 'right' }}>
-                {showRet && uwr.irr != null ? fmtPct(uwr.irr, 1) : '—'}
-              </div>
-
-              {/* Avg Yield */}
-              <div className="num" style={{ padding: '8px 7px', fontSize: 13, fontWeight: 500,
-                color: showRet && uwr.avgYield != null ? 'var(--slate)' : 'var(--faint)', textAlign: 'right' }}>
-                {showRet && uwr.avgYield != null ? fmtPct(uwr.avgYield, 1) : '—'}
-              </div>
 
               {/* CFO Date */}
               <div style={{ padding: '8px 7px', fontSize: 12.5, color: d.cfoDate ? 'var(--slate)' : 'var(--faint)', fontWeight: 400 }}>{d.cfoDate ? fmtDateShort(d.cfoDate) : '—'}</div>
@@ -1028,7 +1003,7 @@ function AddDealModal({ onClose, onAdd }) {
         brokerEGI: parsed.brokerEGI != null ? Number(parsed.brokerEGI) : null,
       });
       const named = (Array.isArray(parsed.brokerContacts) ? parsed.brokerContacts : []).filter((c) => c && c.name).slice(0, 6);
-      setOmContacts({ firm: parsed.brokerFirm || '', people: named });
+      setOmContacts({ firm: parsed.brokerFirm || '', people: named, brokerOffice: parsed.brokerOffice || null, market: parsed.market || null });
       const got = ['name','market','units','vintage','brokerFirm'].filter((k) => parsed[k] != null && parsed[k] !== '').length;
       setOmState('done'); setOmMsg(got + ' field' + (got === 1 ? '' : 's') + ' filled from ' + file.name + ' — review below');
     } catch (e) {
@@ -1837,6 +1812,9 @@ const migrateDeals = (arr) => Array.isArray(arr)
       let r = ns === d.stage ? d : { ...d, stage: ns };
       // Migrate legacy analyst string → assignees array so AssigneePicker shows it
       if (r.analyst && !r.assignees) r = { ...r, assignees: [r.analyst] };
+      // Will left the team; Fisher took over his deals.
+      if (Array.isArray(r.assignees) && r.assignees.includes('Will')) r = { ...r, assignees: [...new Set(r.assignees.map((n) => (n === 'Will' ? 'Fisher' : n)))] };
+      if (r.analyst === 'Will') r = { ...r, analyst: 'Fisher' };
       return r;
     })
   : arr;
@@ -2309,7 +2287,8 @@ async function runOMParse(file) {
   "units": 0,
   "vintage": "year built (see rules) — a string; null if not stated",
   "brokerFirm": "full brokerage firm name from the cover page or 'Exclusively Listed By' section",
-  "brokerContacts": [{ "name": "", "title": "", "phone": "", "email": "" }],
+  "brokerOffice": "City, ST of the listing brokerage's office address printed on the OM (contact page, back cover or footer) — the broker's office, NOT the property's address; null if not shown",
+  "brokerContacts": [{ "name": "", "title": "", "phone": "", "email": "", "office": "City, ST of this person's own office address if printed with their contact info, else null" }],
   "effectiveGrossIncome": 0,
   "totalOpex": 0,
   "opexBasis": "T-12",
@@ -2318,6 +2297,7 @@ async function runOMParse(file) {
 
 Rules for vintage — the year the property was originally BUILT (its construction vintage), not the renovation year. Look on the cover page, the property-summary / highlights box, and any "Year Built", "Built", or "Vintage" field. It may read "Built in 1985", "Year Built: 1985", "1985 Vintage", or "Built 1986 / Renovated 2019" (take the BUILT year, 1986). For a multi-building property built in different years it is often a slash- or comma-joined list, e.g. "Built in 1997/1986/1975" — return all of them exactly as "1997/1986/1975". Return the year(s) as a STRING (no labels). Use null if no construction year is stated.
 
+Rules for brokerOffice and each contact's office — look for a street address next to the broker contacts, on the back cover or in the page footer (e.g. "2101 Cedar Springs Rd, Suite 900, Dallas, TX 75201" → "Dallas, TX"). Return only City, ST. Never return the subject property's address. When the team sits in different offices, give each person their own office.
 Rules for brokerContacts — extract ONLY the named LISTING TEAM for THIS deal: the handful of people a buyer would actually contact (the agents in the cover / "Exclusively Listed By" box, a "For more information contact" block, and the primary people on the final contact page). This is normally 1–6 people.
 CRITICAL — DO NOT dump the brokerage's company directory. Many OMs include a full firm "team" / "advisory group" / "our professionals" roster page listing 15–30 employees by Name + Title across a region. That is a marketing org chart, NOT the deal's listing team — EXCLUDE it entirely. Signs you are looking at a directory to skip: a long grid/list of names under one firm with no per-person phone/email, names for unrelated markets, or more than ~6 people. NEVER return more than 6 contacts. If a page has many names, keep ONLY the few explicitly tied to listing/marketing THIS property (usually the cover or "Exclusively Listed By" names) and drop the rest.
 Capture each person's phone and email WHEN SHOWN — but a person still qualifies as a listing contact if only their name + title appear (some OMs list the listing team without individual emails/phones, sometimes with just a shared team email/phone). Capture name + title in that case and leave phone/email null.
@@ -3023,11 +3003,13 @@ function AltusApp() {
             (c.name && c.name.toLowerCase() === pc.name.toLowerCase()));
           if (exists) {
             next = next.map((c) => c.id === exists.id
-              ? { ...c, dealIds: Array.from(new Set([...(c.dealIds || []), deal.id])), firm: c.firm || _omContacts.firm || '' }
+              ? { ...c, dealIds: Array.from(new Set([...(c.dealIds || []), deal.id])), firm: c.firm || _omContacts.firm || '',
+                  ...(window.netContactMarket ? window.netContactMarket(pc, _omContacts, c) : {}) }
               : c);
           } else {
             next = [...next, { id: 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6),
               name: pc.name, title: pc.title || '', firm: _omContacts.firm || '', email: pc.email || '', phone: pc.phone || '',
+              ...(window.netContactMarket ? window.netContactMarket(pc, { ..._omContacts, market: _omContacts.market || deal.market }, null) : {}),
               dealIds: [deal.id], lastActivity: window.ALTUS_TODAY }];
           }
         });
@@ -3252,7 +3234,8 @@ Do not include any text outside the JSON object.`;
                 ...c, lastActivity: window.ALTUS_TODAY,
                 title: c.title || pc.title || '',
                 firm: c.firm || parsed.brokerFirm || '',
-                dealIds: withDeal(c.dealIds)
+                dealIds: withDeal(c.dealIds),
+                ...(window.netContactMarket ? window.netContactMarket(pc, parsed, c) : {})
               } : c);
             } else {
               const newId = 'c-' + Date.now() + '-' + idx;
@@ -3261,6 +3244,7 @@ Do not include any text outside the JSON object.`;
                 id: newId, name: pc.name || '', firm: parsed.brokerFirm || '',
                 title: pc.title || '', email: pc.email || '', phone: pc.phone || '',
                 markets: parsed.market || '', property: parsed.name || '',
+                ...(window.netContactMarket ? window.netContactMarket(pc, parsed, null) : {}),
                 dealIds: [dealId], notes: '',
                 dateAdded: window.ALTUS_TODAY, lastActivity: window.ALTUS_TODAY
               });
