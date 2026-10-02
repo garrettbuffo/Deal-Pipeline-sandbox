@@ -317,4 +317,40 @@ function TodoView({ todos, deals, onAdd, onPatch, onDelete, onOpenDeal }) {
   );
 }
 
-Object.assign(window, { TodoView, DealTodos });
+/* ── Pipeline table cell: a deal's open tasks plus a quick add. Checking one off completes it
+   (it moves to Completed on the Tasks tab and leaves the pipeline). Tasks carry the deal's id,
+   so they also show on the deal page and the Tasks tab. ── */
+function PipelineTaskCell({ dealId, todos, onAdd, onPatch }) {
+  const [adding, setAdding] = useST(false);
+  const [text, setText] = useST('');
+  const open = (todos || []).filter((t) => t.dealId === dealId && !t.done)
+    .sort((a, b) => (a.priority === 'high' ? -1 : 0) - (b.priority === 'high' ? -1 : 0) || String(a.dueDate || '9').localeCompare(String(b.dueDate || '9')));
+  const save = () => {
+    const t = text.trim();
+    if (t) onAdd({ id: 'todo-' + Date.now(), text: t, done: false, dealId, priority: 'normal', dueDate: null, createdAt: todayStr(), completedAt: null });
+    setText(''); setAdding(false);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+      {open.slice(0, 2).map((t) => (
+        <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <button type="button" title="Mark done" aria-label={'Mark done: ' + t.text}
+            onClick={() => onPatch(t.id, { done: true, completedAt: todayStr() })}
+            style={{ flex: 'none', width: 15, height: 15, borderRadius: 4, border: '1.5px solid ' + (t.priority === 'high' ? 'var(--neg)' : 'var(--line-2)'),
+              background: 'transparent', cursor: 'pointer', padding: 0 }} />
+          <span className="clip" title={t.text} style={{ fontSize: 12, color: 'var(--ink)' }}>{t.text}</span>
+        </div>))}
+      {open.length > 2 && <span style={{ fontSize: 11, color: 'var(--muted)', paddingLeft: 21 }}>+{open.length - 2} more</span>}
+      {adding
+        ? <input autoFocus value={text} placeholder="New task, Enter to save" onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setText(''); setAdding(false); } }} onBlur={save}
+            style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--accent)', borderRadius: 6, padding: '4px 7px', fontSize: 12, outline: 'none',
+              boxShadow: '0 0 0 3px var(--accent-soft)', fontFamily: 'var(--font)', color: 'var(--ink)', background: 'var(--panel)' }} />
+        : <button type="button" onClick={() => setAdding(true)}
+            style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px dashed var(--line-2)', borderRadius: 6, background: 'transparent',
+              color: 'var(--muted)', fontSize: 11.5, fontWeight: 600, padding: '2px 8px', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+            <Icon name="plus" size={11} />Add task</button>}
+    </div>);
+}
+
+Object.assign(window, { TodoView, DealTodos, PipelineTaskCell });

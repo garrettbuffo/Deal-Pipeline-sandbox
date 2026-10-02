@@ -928,7 +928,7 @@ function EditableTitle({ value, onCommit }) {
 function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMUpload,
   t12Data, rrData, onT12Upload, onRRUpload, onClearOM, onClearT12, onClearRR,
   onRunMarketReview, onRunMemo, onImportCoStar,
-  todos, onAddTodo, onPatchTodo, onDeleteTodo, onViewTasks }) {
+  todos, onAddTodo, onPatchTodo, onDeleteTodo, onViewTasks, allDeals, onOpenContact }) {
   const [tab, setTab] = useStateD('summary');
   const [propView, setPropView] = useStateD('combined');
   const [omTargetIdx, setOmTargetIdx] = useStateD(0);
@@ -1199,7 +1199,9 @@ function DealDetail({ deal, onBack, onPatch, omData, onAcceptOM, contacts, onOMU
                   onBlur={(e) => {e.target.style.borderColor = 'var(--line-2)';e.target.style.boxShadow = 'none';}} />
                   </EField>
                   <EField label={dealContacts.length > 1 ? 'Broker Contacts' : 'Broker Contact'}>
-                    {dealContacts.length ?
+                    {dealContacts.length && window.BrokerScorecard ?
+                  <window.BrokerScorecard deal={deal} deals={allDeals} contacts={contacts} dealContacts={dealContacts} onOpenContact={onOpenContact} /> :
+                  dealContacts.length ?
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {dealContacts.map((c) =>
                     <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>

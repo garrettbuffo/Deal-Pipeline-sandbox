@@ -95,6 +95,47 @@ function stateOf(m) {
   if (x) return x[1].toUpperCase();
   return /^[A-Za-z]{2}$/.test(t) ? t.toUpperCase() : null;
 }
+// Metro rollup (best guess, by MSA): city → metro, so Irving and Lewisville count as DFW.
+// Cities not listed are treated as their own metro. Keys are "city|ST".
+const METRO_CITIES = {
+  'DFW|TX': 'Dallas Fort Worth Irving Arlington Plano Frisco Lewisville Denton McKinney Garland Mesquite "Grand Prairie" Carrollton Richardson Addison Grapevine "North Richland Hills" Euless Bedford Hurst Mansfield Allen Rowlett Rockwall Wylie "Little Elm" "The Colony" "Flower Mound" Coppell "Cedar Hill" DeSoto Duncanville Lancaster Weatherford Cleburne Waxahachie Burleson Keller Southlake "Haltom City" "Farmers Branch" Prosper Celina Forney Midlothian Sachse Murphy Lewisville "Highland Village" Saginaw Watauga Benbrook Granbury Corsicana Terrell Ennis "University Park" "Highland Park" Argyle Anna Princeton Melissa Royse "Royse City" Aubrey Sherman',
+  'Houston|TX': 'Houston Katy "Sugar Land" "The Woodlands" Spring Pasadena Pearland Baytown Conroe "League City" Humble "Missouri City" Cypress Tomball Friendswood Galveston "Texas City" Kingwood Stafford Richmond Rosenberg "La Porte" Webster Seabrook Bellaire "Deer Park" Channelview Atascocita Magnolia Alvin Angleton Dickinson',
+  'San Antonio|TX': '"San Antonio" "New Braunfels" Schertz Converse "Universal City" Boerne Seguin "Live Oak" Selma Cibolo Helotes "Leon Valley" Kirby',
+  'Austin|TX': 'Austin "Round Rock" "Cedar Park" Georgetown Pflugerville "San Marcos" Kyle Leander Buda Hutto Bastrop Lakeway Manor Taylor',
+  'Oklahoma City|OK': '"Oklahoma City" OKC Edmond Norman Moore "Midwest City" "Del City" Yukon Mustang Bethany "Warr Acres" Shawnee Guthrie Chickasha',
+  'Tulsa|OK': 'Tulsa "Broken Arrow" Owasso Bixby Jenks "Sand Springs" Sapulpa Glenpool Claremore Coweta',
+  'Charlotte|NC': 'Charlotte Concord Gastonia Huntersville Matthews Mooresville Kannapolis Cornelius "Mint Hill" "Indian Trail" Monroe Davidson Salisbury',
+  'Charlotte|SC': '"Rock Hill" "Fort Mill" "Tega Cay" "Indian Land" Lancaster',
+  'Raleigh-Durham|NC': 'Raleigh Durham Cary "Chapel Hill" Apex "Wake Forest" Garner Morrisville "Holly Springs" Fuquay-Varina Knightdale',
+  'Greenville|SC': 'Greenville Greer Simpsonville Mauldin Easley Anderson "Fountain Inn" Taylors Piedmont',
+  'Spartanburg|SC': 'Spartanburg Boiling Springs Duncan Lyman',
+  'Indianapolis|IN': 'Indianapolis "Beech Grove" Carmel Fishers Greenwood Noblesville Lawrence Speedway Avon Plainfield Brownsburg Westfield Zionsville Franklin Shelbyville Anderson',
+  'Omaha|NE': 'Omaha Bellevue Papillion "La Vista" Elkhorn Ralston Gretna',
+  'Omaha|IA': '"Council Bluffs"',
+  'Sacramento|CA': 'Sacramento "West Sacramento" Roseville "Elk Grove" Folsom "Rancho Cordova" "Citrus Heights" Rocklin Davis Woodland Carmichael',
+  'Phoenix|AZ': 'Phoenix Mesa Chandler Scottsdale Gilbert Glendale Tempe Peoria Surprise Goodyear Avondale Buckeye',
+  'Atlanta|GA': 'Atlanta Marietta Alpharetta Roswell "Sandy Springs" Smyrna Decatur Duluth Lawrenceville Kennesaw Norcross Peachtree "Peachtree City" Dunwoody',
+  'Nashville|TN': 'Nashville Franklin Murfreesboro Brentwood Hendersonville Smyrna Gallatin Lebanon "Mount Juliet" Antioch',
+  'Kansas City|MO': '"Kansas City" Independence "Lee\'s Summit" "Blue Springs" Liberty Raytown Grandview',
+  'Kansas City|KS': '"Kansas City" "Overland Park" Olathe Lenexa Shawnee Leawood Merriam',
+  'Houston|': 'Houston', 'DFW|': 'DFW Dallas "North Dallas" Metroplex "Dallas-Fort Worth" "Dallas/Fort Worth"', 'Oklahoma City|': 'OKC',
+};
+const METRO_LOOKUP = (() => {
+  const m = {};
+  Object.keys(METRO_CITIES).forEach((key) => {
+    const [metro, st] = key.split('|');
+    (METRO_CITIES[key].match(/"[^"]+"|\S+/g) || []).forEach((c) => { m[nm(c.replace(/"/g, '')) + '|' + st] = metro; });
+  });
+  return m;
+})();
+// "Lewisville, TX" → "DFW"; "North Dallas" → "DFW"; "Amarillo, TX" stays "Amarillo, TX"
+function metroOf(market) {
+  const t = String(market || '').trim();
+  if (!t) return '';
+  const x = t.match(/^(.*?),\s*([A-Za-z]{2})\.?$/);
+  const city = nm(x ? x[1] : t), st = x ? x[2].toUpperCase() : '';
+  return METRO_LOOKUP[city + '|' + st] || METRO_LOOKUP[city + '|'] || (x ? x[1].trim() + ', ' + st : t);
+}
 // "123 Main St, Suite 4, dallas, tx 75201" -> "Dallas, TX"
 function cityST(v) {
   const t = String(v || '').replace(/\s+/g, ' ').trim();
@@ -452,6 +493,13 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
   const [actType, setActType] = useStateN('');
   const [msg, setMsg] = useStateN('');
   const importRef = useRefN(null);
+  // "Open in Network" from a deal page hands over a contact id
+  useEffectN(() => {
+    const take = () => { const id = window.__netOpenContact; if (id) { window.__netOpenContact = null; setOpenId(id); } };
+    take();
+    window.addEventListener('altus-open-contact', take);
+    return () => window.removeEventListener('altus-open-contact', take);
+  }, []);
 
   const timeline = useMemoN(() => buildTimeline(acts, deals, contacts), [acts, deals, contacts]);
   const rs = useMemoN(() => relationshipState(contacts, timeline), [contacts, timeline]);
@@ -644,14 +692,16 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
   }), 'altus-network-activity.csv');
 
   // markets → firms → people
-  const [mktBy, setMktBy] = useStateN('market');
+  const [mktBy, setMktBy] = useStateN('metro');
   const [openMkt, setOpenMkt] = useStateN(null);
   const [openMktFirm, setOpenMktFirm] = useStateN(null);
   const markets = useMemoN(() => {
     const m = {};
     shown.forEach((c) => {
       let keys = marketsOf(c);
+      if (!keys.length && c.office) keys = [c.office];
       if (mktBy === 'state') keys = [...new Set(keys.map((x) => stateOf(x)).filter(Boolean))];
+      if (mktBy === 'metro') keys = [...new Set(keys.map((x) => metroOf(x)).filter(Boolean))];
       if (!keys.length) keys = [''];
       keys.forEach((label) => {
         const k = label ? marketKey(label) : '~none';
@@ -785,11 +835,11 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
       {tab === 'markets' && <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 12, overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--line)' }}>
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>Group by</span>
-          <NetSeg value={mktBy} onChange={(v) => { setMktBy(v); setOpenMkt(null); setOpenMktFirm(null); }} options={[{ value: 'market', label: 'Market' }, { value: 'state', label: 'State' }]} />
-          <span style={{ fontSize: 11.5, color: 'var(--faint)', marginLeft: 'auto' }}>A contact covering several markets shows under each.</span>
+          <NetSeg value={mktBy} onChange={(v) => { setMktBy(v); setOpenMkt(null); setOpenMktFirm(null); }} options={[{ value: 'metro', label: 'Metro' }, { value: 'market', label: 'City' }, { value: 'state', label: 'State' }]} />
+          <span style={{ fontSize: 11.5, color: 'var(--faint)', marginLeft: 'auto' }}>Metros are a best guess from each city (Irving and Lewisville roll up to DFW). A contact covering several markets shows under each.</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px,2fr) 80px 70px 80px 70px 70px 110px', background: 'var(--panel-2)', borderBottom: '1px solid var(--line)' }}>
-          {[mktBy === 'state' ? 'State' : 'Market', 'Contacts', 'Firms', 'Deals', 'LOIs', 'Closed', 'Last touch'].map((h) =>
+          {[mktBy === 'state' ? 'State' : mktBy === 'metro' ? 'Metro' : 'City', 'Contacts', 'Firms', 'Deals', 'LOIs', 'Closed', 'Last touch'].map((h) =>
             <div key={h} style={{ padding: '8px 10px', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--muted)' }}>{h}</div>)}
         </div>
         {markets.map((g) => {
@@ -879,4 +929,55 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
     </div>);
 }
 
-Object.assign(window, { NetworkView, AltusActivities, NET_TYPES, NET_TIERS, netContactMarket, cityST });
+/* ── Broker scorecard on the deal page: each listing contact's record with us and their firm's. ── */
+function BrokerScorecard({ deal, deals, contacts, dealContacts, onOpenContact }) {
+  const acts = useActivities();
+  const all = Array.isArray(deals) ? deals : [];
+  const timeline = useMemoN(() => buildTimeline(acts, all, contacts || []), [acts, all, contacts]);
+  const rs = useMemoN(() => relationshipState(dealContacts, timeline), [dealContacts, timeline]);
+  const pct = (a, b) => (b ? Math.round(a / b * 100) + '%' : '—');
+  const stat = (v, l, color) => <span style={{ whiteSpace: 'nowrap' }}><b className="num" style={{ color: color || 'var(--ink)', fontWeight: 700 }}>{v}</b> {l}</span>;
+  const firms = {};
+  dealContacts.forEach((c) => { const k = firmKey(c.firm); if (!firms[k]) firms[k] = { label: c.firm || 'No firm', key: k }; });
+  const firmRows = Object.values(firms).filter((f) => f.key !== 'no firm').map((f) => {
+    const team = (contacts || []).filter((c) => firmKey(c.firm) === f.key);
+    const ds = new Map();
+    team.forEach((c) => dealsForContact(c, all).forEach((d) => ds.set(d.id, d)));
+    return { ...f, people: team.length, funnel: dealFunnel([...ds.values()]) };
+  });
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {dealContacts.map((c) => {
+        const f = dealFunnel(dealsForContact(c, all));
+        const st = rs[c.id];
+        return (
+          <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{c.name || '—'}</span>
+              {c.title ? <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· {c.title}</span> : null}
+              {NET_TIERS[c.tier] && <TierChip tier={c.tier} />}
+              {typeMeta(c.type) && <TypeChip type={c.type} />}
+            </span>
+            {(c.email || c.phone) && <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 400 }}>
+              {c.email ? <a href={'mailto:' + c.email} style={{ color: 'var(--accent)', textDecoration: 'none' }}>{c.email}</a> : null}
+              {c.email && c.phone ? '   ·   ' : ''}{c.phone || ''}</span>}
+            <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 11.5, color: 'var(--muted)', fontWeight: 400,
+              background: 'var(--panel-2)', borderRadius: 6, padding: '4px 8px', marginTop: 3 }}>
+              {stat(f.sent, f.sent === 1 ? 'deal sent' : 'deals sent')}
+              {stat(f.loi, 'LOI' + (f.loi === 1 ? '' : 's'), f.loi ? 'var(--warn)' : undefined)}
+              {stat(pct(f.loi, f.sent), 'LOI rate')}
+              {stat(f.closed, 'closed', f.closed ? 'var(--pos)' : undefined)}
+              <span>last touch <b style={{ color: 'var(--ink)', fontWeight: 600 }}><LastText st={st} /></b></span>
+              {onOpenContact && <button type="button" onClick={() => onOpenContact(c.id)}
+                style={{ marginLeft: 'auto', border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}>Open in Network</button>}
+            </span>
+          </div>);
+      })}
+      {firmRows.map((f) => (
+        <div key={f.key} style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 400, borderTop: '1px solid var(--line)', paddingTop: 6 }}>
+          <b style={{ color: 'var(--slate)', fontWeight: 600 }}>{f.label}</b> overall: {f.funnel.sent} deals sent · {f.funnel.loi} LOIs ({pct(f.funnel.loi, f.funnel.sent)}) · {f.funnel.closed} closed · {f.people} contacts
+        </div>))}
+    </div>);
+}
+
+Object.assign(window, { BrokerScorecard, NetworkView, AltusActivities, NET_TYPES, NET_TIERS, netContactMarket, cityST, metroOf, dealsForContact, dealFunnel, relationshipState, buildTimeline });

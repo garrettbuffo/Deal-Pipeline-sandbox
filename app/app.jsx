@@ -586,6 +586,7 @@ const PIPE_COLS = [
   { key: 'market',        label: 'Market',        defW: 138, min: 90,  sortable: true },
   { key: 'stage',         label: 'Stage',         defW: 162, min: 144 },
   { key: 'status',        label: 'Status',        defW: 170, min: 120, sortable: true },
+  { key: 'tasks',         label: 'Tasks',         defW: 190, min: 140 },
   { key: 'assignee',      label: 'Assignee',      defW: 116, min: 92, sortable: true },
   { key: 'askPrice',      label: 'Ask',           defW: 100, min: 78,  sortable: true, align: 'right' },
   { key: 'purchasePrice', label: 'UW Price',      defW: 100, min: 78,  sortable: true, align: 'right' },
@@ -653,7 +654,9 @@ function StatusInput({ value, onChange }) {
   );
 }
 
-function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onReorder, omMap, t12Map, rrMap, onOM, onT12, onRR, sortKey: sortKeyProp, sortDir: sortDirProp, onSortKeyChange, onSortDirChange }) {
+function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onReorder, omMap, t12Map, rrMap, onOM, onT12, onRR, sortKey: sortKeyProp, sortDir: sortDirProp, onSortKeyChange, onSortDirChange, taskApi }) {
+  // The Tasks column only shows where a task store is passed in (the active pipeline, not Dead Deals).
+  const COLS = taskApi && window.PipelineTaskCell ? PIPE_COLS : PIPE_COLS.filter((c) => c.key !== 'tasks');
   const [localSortKey, setLocalSortKey] = useS('manual');   // manual = persisted drag order; stage edits never reorder
   const [localSortDir, setLocalSortDir] = useS('asc');
   // sort state is lifted to the app shell when a controller is passed in, so it survives
@@ -763,7 +766,7 @@ function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onRe
   const onTopScroll = () => { if (syncing.current) return; syncing.current = true; if (tableRef.current && topRef.current) tableRef.current.scrollLeft = topRef.current.scrollLeft; syncing.current = false; };
   const onTableScroll = () => { if (syncing.current) return; syncing.current = true; if (tableRef.current && topRef.current) topRef.current.scrollLeft = tableRef.current.scrollLeft; syncing.current = false; };
 
-  const grid = PIPE_COLS.map((c) => c.flex ? `minmax(${colW[c.key]}px,1.7fr)` : `${colW[c.key]}px`).join(' ');
+  const grid = COLS.map((c) => c.flex ? `minmax(${colW[c.key]}px,1.7fr)` : `${colW[c.key]}px`).join(' ');
   const nameLeft = colW.sel;  // frozen Deal/Asset column sits just right of the select column
   const DOC_ACCEPT = '.pdf,.csv,.txt,.xlsx,.xls,.xlsm,application/pdf,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
 
@@ -806,7 +809,7 @@ function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onRe
         {/* Column headers */}
         <div style={{ display: 'grid', gridTemplateColumns: grid, padding: '0 14px',
           background: 'var(--panel-2)', borderBottom: '1px solid var(--line)', position: 'sticky', top: 0, zIndex: 3 }}>
-          {PIPE_COLS.map((c, ci) => {
+          {COLS.map((c, ci) => {
             if (c.key === 'sel') return (
               <div key="sel" style={{ padding: '9px 7px', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 position: 'sticky', left: 0, zIndex: 4, background: 'var(--panel-2)' }} onClick={(e) => e.stopPropagation()}>
@@ -824,7 +827,7 @@ function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onRe
                   justifyContent: c.align === 'right' ? 'flex-end' : c.align === 'center' ? 'center' : 'flex-start' }}>
                 {c.label}
                 {c.sortable && sortKey === c.key && <Icon name={sortDir === 'asc' ? 'arrowU' : 'arrowD'} size={10} />}
-                {c.key !== 'sel' && ci < PIPE_COLS.length - 1 && (
+                {c.key !== 'sel' && ci < COLS.length - 1 && (
                   <div onMouseDown={(e) => startResize(c.key, c.min, e)} onClick={(e) => e.stopPropagation()}
                     title="Drag to resize"
                     style={{ position: 'absolute', top: 0, right: -5, width: 11, height: '100%', cursor: 'col-resize', zIndex: 5 }}
@@ -905,6 +908,12 @@ function PipelineTable({ deals, onOpen, onPatch, onBulkPatch, onBulkDelete, onRe
               <div style={{ padding: '8px 7px' }} onClick={(e) => e.stopPropagation()}>
                 <StatusInput value={d.status != null ? d.status : (d._rawStatus || '')} onChange={(v) => onPatch(d.id, { status: v })} />
               </div>
+
+              {/* Tasks — open tasks for the deal + quick add */}
+              {COLS.some((c) => c.key === 'tasks') &&
+              <div style={{ padding: '6px 7px', minWidth: 0 }} onClick={(e) => e.stopPropagation()}>
+                <window.PipelineTaskCell dealId={d.id} todos={taskApi.todos} onAdd={taskApi.add} onPatch={taskApi.patch} />
+              </div>}
 
               {/* Assignee */}
               <div style={{ padding: '8px 7px', display: 'flex', alignItems: 'center', gap: 4 }} onClick={(e) => e.stopPropagation()}>
@@ -1439,7 +1448,7 @@ function SubmarketTable({ deals, onOpen, onPatch, omMap, t12Map, rrMap, onOM, on
   );
 }
 
-function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM, onT12, onRR, onBulkPatch, onBulkDelete, onReorder, omMap, t12Map, rrMap, zebra, sortKey, sortDir, onSortKeyChange, onSortDirChange }) {
+function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM, onT12, onRR, onBulkPatch, onBulkDelete, onReorder, omMap, t12Map, rrMap, zebra, sortKey, sortDir, onSortKeyChange, onSortDirChange, taskApi }) {
   const [q, setQ] = useS('');
   const [type, setType] = useS('All');
   const [stage, setStage] = useS('All');
@@ -1592,7 +1601,7 @@ function PipelineView({ deals, allDeals, onOpen, onPatch, onAdd, onImport, onOM,
       {groupBy === 'market'
         ? <SubmarketTable deals={filtered} onOpen={onOpen} onPatch={onPatch} omMap={omMap} t12Map={t12Map} rrMap={rrMap} onOM={onOM} onT12={onT12} onRR={onRR}/>
         : mode === 'table'
-          ? <PipelineTable deals={filtered} onOpen={onOpen} onPatch={onPatch} onBulkPatch={onBulkPatch} onBulkDelete={onBulkDelete} onReorder={onReorder} omMap={omMap} t12Map={t12Map} rrMap={rrMap} onOM={onOM} onT12={onT12} onRR={onRR} sortKey={sortKey} sortDir={sortDir} onSortKeyChange={onSortKeyChange} onSortDirChange={onSortDirChange}/>
+          ? <PipelineTable deals={filtered} onOpen={onOpen} onPatch={onPatch} onBulkPatch={onBulkPatch} onBulkDelete={onBulkDelete} onReorder={onReorder} omMap={omMap} t12Map={t12Map} rrMap={rrMap} onOM={onOM} onT12={onT12} onRR={onRR} sortKey={sortKey} sortDir={sortDir} onSortKeyChange={onSortKeyChange} onSortDirChange={onSortDirChange} taskApi={taskApi}/>
           : <GroupedCards deals={filtered} onOpen={onOpen} onPatch={onPatch} omMap={omMap} t12Map={t12Map} rrMap={rrMap} onOM={onOM} onT12={onT12} onRR={onRR}/>}
 
       <StashWidget deals={allDeals} onOpen={onOpen} onPatch={onPatch} />
@@ -1812,9 +1821,9 @@ const migrateDeals = (arr) => Array.isArray(arr)
       let r = ns === d.stage ? d : { ...d, stage: ns };
       // Migrate legacy analyst string → assignees array so AssigneePicker shows it
       if (r.analyst && !r.assignees) r = { ...r, assignees: [r.analyst] };
-      // Will left the team; Fisher took over his deals.
-      if (Array.isArray(r.assignees) && r.assignees.includes('Will')) r = { ...r, assignees: [...new Set(r.assignees.map((n) => (n === 'Will' ? 'Fisher' : n)))] };
-      if (r.analyst === 'Will') r = { ...r, analyst: 'Fisher' };
+      // Will is no longer on the team: drop him from deal assignees (Fisher is available to assign).
+      if (r.analyst === 'Will') r = { ...r, analyst: null };
+      if (Array.isArray(r.assignees) && r.assignees.includes('Will')) r = { ...r, assignees: r.assignees.filter((n) => n !== 'Will') };
       return r;
     })
   : arr;
@@ -3553,12 +3562,15 @@ ${fullText.slice(0, 60000)}`;
         onClearOM={clearOM} onClearT12={clearT12} onClearRR={clearRR}
         onRunMarketReview={runMarketReview} onRunMemo={runMemoNarrative} onImportCoStar={importCoStar}
         todos={todos} onAddTodo={addTodo} onPatchTodo={patchTodo} onDeleteTodo={deleteTodo}
-        onViewTasks={() => { setOpenId(null); setView('tasks'); }} /> :
+        onViewTasks={() => { setOpenId(null); setView('tasks'); }}
+        allDeals={deals}
+        onOpenContact={(id) => { window.__netOpenContact = id; setOpenId(null); setView('network'); window.dispatchEvent(new Event('altus-open-contact')); }} /> :
         view === 'pipeline' ? <PipelineView deals={pipelineDeals} allDeals={deals} onOpen={open} onPatch={patch}
         onAdd={addDeal} onImport={importDeals} onOM={handleOMUpload} onT12={handleT12Upload} onRR={handleRentRollUpload}
         onBulkPatch={bulkPatch} onBulkDelete={bulkDelete} onReorder={reorderVisible}
         omMap={omMap} t12Map={t12Map} rrMap={rrMap}
         sortKey={pipeSortKey} sortDir={pipeSortDir} onSortKeyChange={setPipeSortKey} onSortDirChange={setPipeSortDir}
+        taskApi={{ todos, add: addTodo, patch: patchTodo }}
         zebra={t.zebra} /> :
         view === 'loi' ? <LOIStatusView deals={loiDeals} onOpen={open} onPatch={patch} /> :
         view === 'metrics' ? <MetricsView deals={liveDeals} allDeals={deals} onOpen={open} /> :
