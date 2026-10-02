@@ -1824,6 +1824,8 @@ const migrateDeals = (arr) => Array.isArray(arr)
       // Will is no longer on the team: drop him from deal assignees (Fisher is available to assign).
       if (r.analyst === 'Will') r = { ...r, analyst: null };
       if (Array.isArray(r.assignees) && r.assignees.includes('Will')) r = { ...r, assignees: r.assignees.filter((n) => n !== 'Will') };
+      // Underwritten deals keep the assumptions they were underwritten with (see assumptions.js).
+      if (window.AltusAssumptions && window.AltusAssumptions.withSnapshot) r = window.AltusAssumptions.withSnapshot(r);
       return r;
     })
   : arr;
@@ -2975,7 +2977,8 @@ function AltusApp() {
     r.setProperty('--row-h', (t.density === 'compact' ? 38 : t.density === 'comfy' ? 52 : 44) + 'px');
   }, [t.accent, t.density]);
 
-  const patch = (id, changes) => setDeals((ds) => ds.map((d) => d.id === id ? { ...d, ...changes } : d));
+  const lockUW = (d) => (window.AltusAssumptions && window.AltusAssumptions.withSnapshot ? window.AltusAssumptions.withSnapshot(d) : d);
+  const patch = (id, changes) => setDeals((ds) => ds.map((d) => d.id === id ? lockUW({ ...d, ...changes }) : d));
   const bulkPatch = (ids, changes) => { const s = new Set(ids); setDeals((ds) => ds.map((d) => s.has(d.id) ? { ...d, ...changes } : d)); };
   const bulkDelete = (ids) => {
     const s = new Set(ids);
@@ -3319,7 +3322,7 @@ ${excerpt}`;
         setDeals((ds) => ds.map((d) => {
           if (d.id !== dealId) return d;
           const nd = { ...d, rentRoll };
-          return window.rentRollFields ? { ...nd, ...window.rentRollFields(nd) } : nd;
+          return lockUW(window.rentRollFields ? { ...nd, ...window.rentRollFields(nd) } : nd);
         }));
       }
       if (!agg || !agg.totalUnits) throw new Error('No unit rows could be read from this rent roll.');
@@ -3562,9 +3565,7 @@ ${fullText.slice(0, 60000)}`;
         onClearOM={clearOM} onClearT12={clearT12} onClearRR={clearRR}
         onRunMarketReview={runMarketReview} onRunMemo={runMemoNarrative} onImportCoStar={importCoStar}
         todos={todos} onAddTodo={addTodo} onPatchTodo={patchTodo} onDeleteTodo={deleteTodo}
-        onViewTasks={() => { setOpenId(null); setView('tasks'); }}
-        allDeals={deals}
-        onOpenContact={(id) => { window.__netOpenContact = id; setOpenId(null); setView('network'); window.dispatchEvent(new Event('altus-open-contact')); }} /> :
+        onViewTasks={() => { setOpenId(null); setView('tasks'); }} /> :
         view === 'pipeline' ? <PipelineView deals={pipelineDeals} allDeals={deals} onOpen={open} onPatch={patch}
         onAdd={addDeal} onImport={importDeals} onOM={handleOMUpload} onT12={handleT12Upload} onRR={handleRentRollUpload}
         onBulkPatch={bulkPatch} onBulkDelete={bulkDelete} onReorder={reorderVisible}

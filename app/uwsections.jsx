@@ -64,7 +64,7 @@ function sizingNote(sz) {
   if (sz.dscrLoan != null) return 'sized by leverage · DSCR allows ' + fmtShort(sz.dscrLoan);
   return sz.rule === 'ltv' ? 'leverage only (override)' : null;
 }
-const assumptionQuotes = () => (window.AltusAssumptions ? window.AltusAssumptions.get().quotes : null);
+const assumptionQuotes = (deal) => (window.AltusAssumptions ? window.AltusAssumptions.forDeal(deal).get().quotes : null);
 function CompactGrid({ children }) {
   return <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 18px', marginTop: 14 }}>{children}</div>;
 }
@@ -464,7 +464,7 @@ function AcqFinancingSection({ deal, set, uw }) {
   // turns on and configures the HUD takeout refinance.
   // Terms come from the current quotes on the Assumptions tab; the rate stays linked so a
   // quote change there flows to this deal.
-  const Q = assumptionQuotes();
+  const Q = assumptionQuotes(deal);
   const qLoan = (k, fb) => (Q && Q[k]) ? { basis: Q[k].basis, pct: Q[k].maxLev, rate: Q[k].rate, amYears: Q[k].amYears, ioYears: Q[k].ioYears, rateMode: 'linked' } : fb;
   const hudRefi = (Q && Q.hudRefi) || { maxLev: 80, rate: 6, amYears: 35, ioYears: 0 };
   const SCENARIOS = {
@@ -576,7 +576,7 @@ function RefiSection({ deal, set, uw }) {
   const refi = deal.refi || { enabled: false };
   const on = !!refi.enabled;
   const setRefi = (k, v) => set('refi', { ...refi, [k]: v });
-  const Q = assumptionQuotes();
+  const Q = assumptionQuotes(deal);
   const QUOTE_OPTS = [['hudRefi', 'HUD takeout'], ['agencyRefi', 'Agency takeout'], ['custom', 'Custom']];
   const quoteKey = refi.quote || 'hudRefi';
   const applyQuote = (k) => {
@@ -925,9 +925,36 @@ function PortfolioUWTab({ deal, set, view, setView, setProperties, excluded = {}
   );
 }
 
+/* Which assumptions this deal runs on: the set it locked in when first underwritten. Changes on the
+   Assumptions tab only reach deals underwritten afterwards; this offers a deliberate per-deal update. */
+function AssumptionLockNote({ deal, set }) {
+  const A = window.AltusAssumptions;
+  const [armed, setArmed] = useSU(false);
+  if (!A || !A.forDeal || !deal.uwAssumptions) return null;
+  const stale = A.isStale(deal);
+  const when = deal.uwAssumptions.takenAt ? new Date(deal.uwAssumptions.takenAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'underwriting';
+  const update = () => { const next = A.refreshSnapshot(deal); set({ uwAssumptions: next.uwAssumptions, ...(next.properties ? { properties: next.properties } : {}) }); setArmed(false); };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderRadius: 'var(--radius-lg)', flexWrap: 'wrap',
+      background: stale ? 'var(--warn-soft)' : 'var(--panel-2)', border: '1px solid ' + (stale ? '#f0d9a8' : 'var(--line)'), fontSize: 12.5, color: 'var(--slate)' }}>
+      <Icon name="lock" size={13} style={{ color: stale ? 'var(--warn)' : 'var(--muted)' }} />
+      <span>{stale
+        ? <span>Underwritten on the assumptions from <b>{when}</b>. The Assumptions tab has changed since; this deal keeps its original debt quotes, fees and closing costs.</span>
+        : <span>Locked to the assumptions from <b>{when}</b> (current). Later changes on the Assumptions tab won't change this deal.</span>}</span>
+      {stale && <button type="button" onClick={() => (armed ? update() : setArmed(true))}
+        style={{ marginLeft: 'auto', border: '1px solid ' + (armed ? 'var(--warn)' : 'var(--line-2)'), background: 'var(--panel)', color: armed ? 'var(--warn)' : 'var(--slate)',
+          borderRadius: 7, padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}>
+        {armed ? 'Re-price this deal? Click again' : 'Use current assumptions'}</button>}
+    </div>);
+}
+
 function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, excluded, setExcluded, stickyTop, onT12Upload, t12Data }) {
   const isPortfolio = !!deal.isPortfolio && Array.isArray(deal.properties) && deal.properties.length > 1;
-  if (isPortfolio) return <PortfolioUWTab deal={deal} set={set} view={propView} setView={setPropView} setProperties={setProperties} excluded={excluded} setExcluded={setExcluded} stickyTop={stickyTop} />;
+  if (isPortfolio) return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <AssumptionLockNote deal={deal} set={set} />
+      <PortfolioUWTab deal={deal} set={set} view={propView} setView={setPropView} setProperties={setProperties} excluded={excluded} setExcluded={setExcluded} stickyTop={stickyTop} />
+    </div>);
   const m = computeMetrics(deal);
   const uw = computeUW(deal);
   const fromExcel = window.hasExcelReturns ? window.hasExcelReturns(deal) : false;
@@ -939,6 +966,7 @@ function FullUnderwritingTab({ deal, set, propView, setPropView, setProperties, 
         <Icon name="calc" size={15} style={{ color: 'var(--accent-2)', flex: 'none', marginTop: 1 }} />
         <span>This deal's reported returns come from the linked Excel model. The Full UW tab below is a screening estimate and is not the source of record for this deal.</span>
       </div>}
+      <AssumptionLockNote deal={deal} set={set} />
       <PricingBasis deal={deal} set={set} m={m} />
       <IncomeVacancySection deal={deal} set={set} onT12Upload={onT12Upload} t12Data={t12Data} />
       <AcqFinancingSection deal={deal} set={set} uw={uw} />

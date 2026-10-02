@@ -48,7 +48,7 @@ function DebtQuotesCard({ st, linked }) {
         </td>
         <td style={A_TD}><FieldInput value={q.loanFeePct} onChange={(v) => upd(k, 'loanFeePct', v)} suffix="%" align="left" width={80} /></td>
         <td style={{ ...A_TD, textAlign: 'right' }} className="num">
-          <span title="Deals whose rate currently follows this quote" style={{ fontWeight: 700, color: linked[k] ? 'var(--accent)' : 'var(--faint)' }}>{linked[k] || 0}</span>
+          <span title="Deals not yet locked whose rate follows this quote; underwritten deals keep their own copy" style={{ fontWeight: 700, color: linked[k] ? 'var(--accent)' : 'var(--faint)' }}>{linked[k] || 0}</span>
         </td>
       </tr>);
   };
@@ -170,10 +170,13 @@ function AssumptionsView({ deals }) {
   const [confirmReset, setConfirmReset] = useStateA(false);
   useEffectA(() => { if (!confirmReset) return; const t = setTimeout(() => setConfirmReset(false), 3500); return () => clearTimeout(t); }, [confirmReset]);
 
-  // How many deals each quote is currently driving (rate linked to it).
+  // Underwritten deals already locked to their own assumptions copy, and per quote, how many
+  // deals still follow the live quote (none are locked yet), i.e. what a change here would move.
+  const lockedN = (deals || []).filter((d) => d.uwAssumptions).length;
   const linked = useMemoA(() => {
     const out = {};
     (deals || []).forEach((d) => {
+      if (d.uwAssumptions) return;
       if (!window.hasUWInputs || !window.hasUWInputs(d)) return;
       let uw; try { uw = window.computeUW(d); } catch (e) { return; }
       if (uw.acqRate && uw.acqRate.linked && uw.acqRate.quoteKey) out[uw.acqRate.quoteKey] = (out[uw.acqRate.quoteKey] || 0) + 1;
@@ -188,7 +191,7 @@ function AssumptionsView({ deals }) {
         <div>
           <h2 style={{ margin: 0, fontSize: 21, fontWeight: 700, color: 'var(--ink)' }}>Underwriting Assumptions</h2>
           <p style={{ margin: '4px 0 0', fontSize: 13.5, color: 'var(--muted)', maxWidth: 720 }}>
-            Firm-wide inputs used by every deal’s Full UW. Changes apply right away to deals on the standard closing schedule or a linked debt quote.
+            Firm-wide inputs for new underwriting. Changes apply to deals underwritten from now on; a deal that is already underwritten keeps the assumptions it was underwritten with ({lockedN} locked today). Any one deal can be moved onto the current set from its Full UW tab.
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

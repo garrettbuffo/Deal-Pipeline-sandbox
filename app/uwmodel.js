@@ -166,7 +166,8 @@
       rows.push({ year: y, gpr, vac, egi, opex, noi });
     }
 
-    const A = window.AltusAssumptions || null;   // firm-wide debt quotes + closing-cost schedule
+    // debt quotes + closing-cost schedule: the set this deal locked in when first underwritten, else the live firm-wide set
+    const A = window.AltusAssumptions ? window.AltusAssumptions.forDeal(deal) : null;
     // Lender-style sizing: the lesser of max leverage and the loan the minimum DSCR supports,
     // sized on the amortizing payment the way lenders size. A deal can switch to leverage-only.
     // dscrBasis 'io' (bridge): the test uses the interest-only payment when the loan has IO.
@@ -520,7 +521,7 @@
   function computeCombinedUW(deal) {
     const props = (Array.isArray(deal.properties) ? deal.properties : []).filter((p) => hasUWInputs(p));
     if (!props.length) return null;
-    const A = window.AltusAssumptions || null;
+    const A = window.AltusAssumptions ? window.AltusAssumptions.forDeal(deal) : null;
     const totalPrice = props.reduce((s, p) => s + numOr(p.purchasePrice, 0), 0);
     const portfolioFee = A && totalPrice > 0 ? A.acqFee(totalPrice).fee : null;   // tiered at the portfolio level
     const uws = props.map((p) => computeUW(p, portfolioFee == null ? {} : { acqFeeOverride: portfolioFee * numOr(p.purchasePrice, 0) / totalPrice }));

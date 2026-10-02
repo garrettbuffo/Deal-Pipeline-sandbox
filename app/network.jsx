@@ -493,13 +493,6 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
   const [actType, setActType] = useStateN('');
   const [msg, setMsg] = useStateN('');
   const importRef = useRefN(null);
-  // "Open in Network" from a deal page hands over a contact id
-  useEffectN(() => {
-    const take = () => { const id = window.__netOpenContact; if (id) { window.__netOpenContact = null; setOpenId(id); } };
-    take();
-    window.addEventListener('altus-open-contact', take);
-    return () => window.removeEventListener('altus-open-contact', take);
-  }, []);
 
   const timeline = useMemoN(() => buildTimeline(acts, deals, contacts), [acts, deals, contacts]);
   const rs = useMemoN(() => relationshipState(contacts, timeline), [contacts, timeline]);
@@ -929,55 +922,4 @@ function NetworkView({ contacts, deals, onAddContact, onPatchContact, onPatchDea
     </div>);
 }
 
-/* ── Broker scorecard on the deal page: each listing contact's record with us and their firm's. ── */
-function BrokerScorecard({ deal, deals, contacts, dealContacts, onOpenContact }) {
-  const acts = useActivities();
-  const all = Array.isArray(deals) ? deals : [];
-  const timeline = useMemoN(() => buildTimeline(acts, all, contacts || []), [acts, all, contacts]);
-  const rs = useMemoN(() => relationshipState(dealContacts, timeline), [dealContacts, timeline]);
-  const pct = (a, b) => (b ? Math.round(a / b * 100) + '%' : '—');
-  const stat = (v, l, color) => <span style={{ whiteSpace: 'nowrap' }}><b className="num" style={{ color: color || 'var(--ink)', fontWeight: 700 }}>{v}</b> {l}</span>;
-  const firms = {};
-  dealContacts.forEach((c) => { const k = firmKey(c.firm); if (!firms[k]) firms[k] = { label: c.firm || 'No firm', key: k }; });
-  const firmRows = Object.values(firms).filter((f) => f.key !== 'no firm').map((f) => {
-    const team = (contacts || []).filter((c) => firmKey(c.firm) === f.key);
-    const ds = new Map();
-    team.forEach((c) => dealsForContact(c, all).forEach((d) => ds.set(d.id, d)));
-    return { ...f, people: team.length, funnel: dealFunnel([...ds.values()]) };
-  });
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {dealContacts.map((c) => {
-        const f = dealFunnel(dealsForContact(c, all));
-        const st = rs[c.id];
-        return (
-          <div key={c.id} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, color: 'var(--ink)' }}>{c.name || '—'}</span>
-              {c.title ? <span style={{ fontWeight: 400, color: 'var(--muted)' }}>· {c.title}</span> : null}
-              {NET_TIERS[c.tier] && <TierChip tier={c.tier} />}
-              {typeMeta(c.type) && <TypeChip type={c.type} />}
-            </span>
-            {(c.email || c.phone) && <span style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 400 }}>
-              {c.email ? <a href={'mailto:' + c.email} style={{ color: 'var(--accent)', textDecoration: 'none' }}>{c.email}</a> : null}
-              {c.email && c.phone ? '   ·   ' : ''}{c.phone || ''}</span>}
-            <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', fontSize: 11.5, color: 'var(--muted)', fontWeight: 400,
-              background: 'var(--panel-2)', borderRadius: 6, padding: '4px 8px', marginTop: 3 }}>
-              {stat(f.sent, f.sent === 1 ? 'deal sent' : 'deals sent')}
-              {stat(f.loi, 'LOI' + (f.loi === 1 ? '' : 's'), f.loi ? 'var(--warn)' : undefined)}
-              {stat(pct(f.loi, f.sent), 'LOI rate')}
-              {stat(f.closed, 'closed', f.closed ? 'var(--pos)' : undefined)}
-              <span>last touch <b style={{ color: 'var(--ink)', fontWeight: 600 }}><LastText st={st} /></b></span>
-              {onOpenContact && <button type="button" onClick={() => onOpenContact(c.id)}
-                style={{ marginLeft: 'auto', border: 'none', background: 'none', padding: 0, color: 'var(--accent)', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font)' }}>Open in Network</button>}
-            </span>
-          </div>);
-      })}
-      {firmRows.map((f) => (
-        <div key={f.key} style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 400, borderTop: '1px solid var(--line)', paddingTop: 6 }}>
-          <b style={{ color: 'var(--slate)', fontWeight: 600 }}>{f.label}</b> overall: {f.funnel.sent} deals sent · {f.funnel.loi} LOIs ({pct(f.funnel.loi, f.funnel.sent)}) · {f.funnel.closed} closed · {f.people} contacts
-        </div>))}
-    </div>);
-}
-
-Object.assign(window, { BrokerScorecard, NetworkView, AltusActivities, NET_TYPES, NET_TIERS, netContactMarket, cityST, metroOf, dealsForContact, dealFunnel, relationshipState, buildTimeline });
+Object.assign(window, { NetworkView, AltusActivities, NET_TYPES, NET_TIERS, netContactMarket, cityST, metroOf, dealsForContact, dealFunnel, relationshipState, buildTimeline });
